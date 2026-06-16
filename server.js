@@ -8,7 +8,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
-const { TEXTS_COUNT } = require("./public/words.js");
+const { TEXTS_COUNT, COMMON_WORDS } = require("./public/words.js");
 
 // Port/IP d'écoute :
 // - AlwaysData fournit ALWAYSDATA_HTTPD_PORT / ALWAYSDATA_HTTPD_IP
@@ -55,6 +55,9 @@ const ELIM_COUNT = 50;                   // nb de mots par manche (élimination)
 const ELIM_DURATION_MS = 18000;          // durée d'une manche
 const ELIM_GAP_MS = 3500;                // pause entre les manches
 
+const MODES = ["course", "elimination", "patate", "hard"];
+function normMode(m) { return MODES.includes(m) ? m : "course"; }
+
 function code4() {
   const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let c;
@@ -89,7 +92,8 @@ function startCountdownThenPlay(room) {
   // les clients affichent 3-2-1 (3s) ; on lance ensuite la manche
   setTimeout(() => {
     if (!rooms.has(room.code)) return;
-    if (room.mode === "course") startCourse(room);
+    if (room.mode === "course" || room.mode === "hard") startCourse(room);
+    else if (room.mode === "patate") startPatate(room);
     else startElimRound(room);
   }, 3200);
 }
@@ -97,13 +101,18 @@ function startCountdownThenPlay(room) {
 /* ----- COURSE ----- */
 function startCourse(room) {
   room.state = "playing";
-  room.textIndex = Math.floor(Math.random() * TEXTS_COUNT);
   room.startedAt = Date.now();
   room.firstFinishTimer = null;
   for (const p of room.players.values()) {
     p.progress = 0; p.wpm = 0; p.finished = false; p.finishTime = null; p.rank = null;
   }
-  broadcast(room, { type: "start", mode: "course", textIndex: room.textIndex });
+  if (room.mode === "hard") {
+    room.seed = Math.floor(Math.random() * 1e9);
+    broadcast(room, { type: "start", mode: "hard", seed: room.seed, count: 30 });
+  } else {
+    room.textIndex = Math.floor(Math.random() * TEXTS_COUNT);
+    broadcast(room, { type: "start", mode: "course", textIndex: room.textIndex });
+  }
 }
 function endCourse(room) {
   if (room.state !== "playing") return;
@@ -125,7 +134,7 @@ function endCourse(room) {
       if (b.finished) return 1;
       return b.progress - a.progress;
     });
-  broadcast(room, { type: "result", mode: "course", ranking });
+  broadcast(room, { type: "result", mode: room.mode, ranking });
   resetReady(room);
 }
 
@@ -169,8 +178,70 @@ function finishElim(room) {
   for (let i = room.elimOrder.length - 1; i >= 0; i--) {
     ranking.push({ name: room.elimOrder[i], place: ranking.length + 1 });
   }
-  broadcast(room, { type: "result", mode: "elimination", ranking });
+  broadcast(room, { type: "result", mode: room.mode, ranking });
   resetReady(room);
+}
+
+/* ----- PATATE CHAUDE ----- */
+function randWord() {
+  return COMMON_WORDS[Math.floor(Math.random() * COMMON_WORDS.length)];
+}
+function startPatate(room) {
+  room.state = "playing";
+  room.elimOrder = [];
+  broadcast(room, { type: "start", mode: "patate" });
+  // laisse le temps au 3-2-1 côté client, puis lance la première bombe
+  setTimeout(() => { if (rooms.has(room.code)) beginPatateRound(room); }, 3200);
+}
+function beginPatateRound(room) {
+  if (!rooms.has(room.code)) return;
+  const active = [...room.players.values()].filter((p) => !p.eliminated);
+  if (active.length <= 1) { finishElim(room); return; }
+  room.state = "playing";
+  room.turnIds = active.map((p) => p.id);
+  room.holderIdx = Math.floor(Math.random() * room.turnIds.length);
+  room.bombTotal = 6000 + Math.floor(Math.random() * 8000); // 6 à 14 s
+  room.bombEnd = Date.now() + room.bombTotal;
+  room.currentWord = randWord();
+  if (room.bombTimer) clearTimeout(room.bombTimer);
+  room.bombTimer = setTimeout(() => explodePatate(room), room.bombTotal);
+  sendPotato(room);
+}
+function sendPotato(room) {
+  broadcast(room, {
+    type: "potato",
+    holderId: room.turnIds[room.holderIdx],
+    word: room.currentWord,
+    bombTotal: room.bombTotal,
+    bombRemaining: Math.max(0, room.bombEnd - Date.now()),
+    players: raceState(room),
+  });
+}
+function passPotato(room) {
+  // joueur suivant encore en jeu (la bombe continue de brûler)
+  let guard = 0;
+  do {
+    room.holderIdx = (room.holderIdx + 1) % room.turnIds.length;
+    const p = room.players.get(room.turnIds[room.holderIdx]);
+    if (p && !p.eliminated) break;
+  } while (guard++ < room.turnIds.length);
+  room.currentWord = randWord();
+  sendPotato(room);
+}
+function explodePatate(room) {
+  if (room.state !== "playing" || room.mode !== "patate") return;
+  room.state = "roundend"; // stoppe les « pass » jusqu'à la manche suivante
+  const holder = room.players.get(room.turnIds[room.holderIdx]);
+  if (!holder) { beginPatateRound(room); return; }
+  holder.eliminated = true;
+  room.elimOrder.push(holder.name);
+  const remaining = [...room.players.values()].filter((p) => !p.eliminated).length;
+  broadcast(room, {
+    type: "roundEnd", eliminated: holder.name, eliminatedId: holder.id,
+    remaining, standings: raceState(room),
+  });
+  if (remaining <= 1) setTimeout(() => finishElim(room), 1500);
+  else setTimeout(() => { if (rooms.has(room.code)) beginPatateRound(room); }, ELIM_GAP_MS);
 }
 
 function resetReady(room) {
@@ -179,7 +250,8 @@ function resetReady(room) {
 function resetRoom(room) {
   if (room.roundTimer) clearTimeout(room.roundTimer);
   if (room.firstFinishTimer) clearTimeout(room.firstFinishTimer);
-  room.state = "lobby"; room.round = 0; room.elimOrder = [];
+  if (room.bombTimer) clearTimeout(room.bombTimer);
+  room.state = "lobby"; room.round = 0; room.elimOrder = []; room.turnIds = null;
   for (const p of room.players.values()) {
     p.ready = false; p.eliminated = false; p.progress = 0; p.wpm = 0;
     p.finished = false; p.score = 0;
@@ -210,7 +282,7 @@ wss.on("connection", (ws) => {
         const id = ++pid;
         const player = mkPlayer(id, msg.name, ws);
         const r = {
-          code, hostId: id, mode: msg.mode === "elimination" ? "elimination" : "course",
+          code, hostId: id, mode: normMode(msg.mode),
           state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]),
         };
         rooms.set(code, r);
@@ -228,13 +300,21 @@ wss.on("connection", (ws) => {
         r.players.set(id, player);
         ws.player = player; ws.roomCode = r.code;
         send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, isHost: false, players: playerList(r) });
-        broadcast(r, { type: "players", players: playerList(r) });
+        broadcast(r, { type: "players", players: playerList(r), mode: r.mode });
         break;
       }
       case "ready": {
-        if (!room || !ws.player) return;
+        if (!room || !ws.player || room.state !== "lobby") return;
         ws.player.ready = !!msg.ready;
-        broadcast(room, { type: "players", players: playerList(room) });
+        broadcast(room, { type: "players", players: playerList(room), mode: room.mode });
+        break;
+      }
+      case "setmode": {
+        // seul l'hôte peut changer le mode, et seulement dans le salon
+        if (!room || !ws.player) return;
+        if (room.hostId !== ws.player.id || room.state !== "lobby") return;
+        room.mode = normMode(msg.mode);
+        broadcast(room, { type: "players", players: playerList(room), mode: room.mode });
         break;
       }
       case "start": {
@@ -250,8 +330,15 @@ wss.on("connection", (ws) => {
         broadcast(room, { type: "update", players: raceState(room) });
         break;
       }
+      case "pass": {
+        // le porteur de la patate a tapé son mot → on la refile
+        if (!room || !ws.player || room.mode !== "patate" || room.state !== "playing") return;
+        if (!room.turnIds || room.turnIds[room.holderIdx] !== ws.player.id) return;
+        passPotato(room);
+        break;
+      }
       case "finished": {
-        if (!room || !ws.player || room.mode !== "course" || room.state !== "playing") return;
+        if (!room || !ws.player || (room.mode !== "course" && room.mode !== "hard") || room.state !== "playing") return;
         const p = ws.player;
         if (p.finished) return;
         p.finished = true;
@@ -298,6 +385,7 @@ function leave(ws) {
   ws.roomCode = null;
   if (!room) return;
   const wasHost = ws.player && room.hostId === ws.player.id;
+  const leftId = ws.player ? ws.player.id : null;
   if (ws.player) room.players.delete(ws.player.id);
   ws.player = null;
 
@@ -311,12 +399,17 @@ function leave(ws) {
   if (wasHost) room.hostId = [...room.players.keys()][0];
 
   if (room.state === "lobby") {
-    broadcast(room, { type: "players", players: playerList(room) });
+    broadcast(room, { type: "players", players: playerList(room), mode: room.mode });
   } else if (room.state === "playing") {
-    if (room.mode === "course") {
+    if (room.mode === "course" || room.mode === "hard") {
       const all = [...room.players.values()];
       if (all.length && all.every((x) => x.finished)) endCourse(room);
       else broadcast(room, { type: "update", players: raceState(room) });
+    } else if (room.mode === "patate") {
+      const active = [...room.players.values()].filter((p) => !p.eliminated);
+      if (active.length <= 1) { if (room.bombTimer) clearTimeout(room.bombTimer); finishElim(room); }
+      else if (room.turnIds && room.turnIds[room.holderIdx] === leftId) passPotato(room); // le porteur est parti
+      else sendPotato(room); // rafraîchit la liste
     } else {
       // élimination : si un seul joueur actif reste, on termine
       const active = [...room.players.values()].filter((p) => !p.eliminated);

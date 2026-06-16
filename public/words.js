@@ -38,6 +38,26 @@ const COMMON_WORDS = [
   "sourire","dormir","manger","boire","vivre","mourir","naître","grandir","changer","devenir"
 ];
 
+// Mots difficiles : accents, lettres rares, mots longs (mode « difficile »)
+const HARD_WORDS = [
+  "château","hétéroclite","généalogie","kinésithérapeute","électroencéphalogramme",
+  "otorhinolaryngologie","désoxyribonucléique","ambiguïté","exiguïté","coïncidence",
+  "égoïsme","héroïque","naïveté","stoïque","païen","aïeul","caïman","faïence","mosaïque",
+  "laïcité","archaïque","ouïe","inouï","anticonstitutionnellement","chrysanthème",
+  "psychologie","rythme","système","événement","éphémère","métamorphose","onomatopée",
+  "parallélépipède","bureaucratie","dysfonctionnement","enchevêtrement","abasourdi",
+  "saugrenu","époustouflant","pusillanime","obséquieux","somnambule","crépuscule",
+  "éblouissant","vraisemblablement","quincaillerie","écœurant","gargouille","libellule",
+  "millefeuille","portefeuille","chèvrefeuille","gageure","prestidigitateur","quintessence",
+  "chuchotement","protozoaire","paradoxe","sérénité","théâtre","piqûre","aiguë","ciguë",
+  "jeûne","bûcheron","flûtiste","maître","traître","huître","cloître","chômage","diplôme",
+  "drôlerie","extrême","suprême","problème","modèle","fidèle","siècle","règlement","élève",
+  "préférée","espèce","déçu","reçu","façade","garçon","leçon","français","soupçon","hameçon",
+  "glaçon","tronçon","caleçon","balançoire","accueillir","cueillette","orgueilleux",
+  "recueillement","oxygène","hydrogène","kaléidoscope","labyrinthe","hippopotame","rhinocéros",
+  "zoologique","sténographie","sphygmomanomètre","anticonformiste","circonlocution"
+];
+
 // Textes pour le mode « Texte » (originaux, libres de droits)
 const TEXTS = [
   "Le matin, la ville s'éveille lentement sous une lumière douce. Les rues encore vides se remplissent peu à peu de pas pressés et de voix tranquilles. Quelque part, une fenêtre s'ouvre, et l'odeur du café se répand dans l'air frais du jour qui commence.",
@@ -71,20 +91,22 @@ function mulberry32(seed) {
   };
 }
 
-function generateWords(count, seed) {
+function pickWords(list, count, seed) {
   const rng = seed === undefined ? Math.random : mulberry32(seed);
   const out = [];
   let last = -1;
   for (let i = 0; i < count; i++) {
     let idx;
-    do { idx = Math.floor(rng() * COMMON_WORDS.length); } while (idx === last);
+    do { idx = Math.floor(rng() * list.length); } while (idx === last);
     last = idx;
-    out.push(COMMON_WORDS[idx]);
+    out.push(list[idx]);
   }
   return out.join(" ");
 }
+function generateWords(count, seed) { return pickWords(COMMON_WORDS, count, seed); }
+function generateHardWords(count, seed) { return pickWords(HARD_WORDS, count, seed); }
 
 // Expose pour le navigateur et pour Node (serveur).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { COMMON_WORDS, TEXTS, TEXTS_COUNT, generateWords, mulberry32 };
+  module.exports = { COMMON_WORDS, HARD_WORDS, TEXTS, TEXTS_COUNT, generateWords, generateHardWords, mulberry32 };
 }

@@ -269,11 +269,84 @@ textEngine.on({
 $("#text-shuffle").addEventListener("click", () => { setupText(); textEngine.focus(); });
 onEnter["solo-text"] = () => { setupText(); setTimeout(() => textEngine.focus(), 30); };
 
+/* ============================================================
+   SOLO — ZEN (sans chrono, nombre de mots à finir)
+   ============================================================ */
+const zenEngine = createEngine($("#zen-typing"));
+let zenCount = 50, zenTick = null;
+
+function setupZen() {
+  zenEngine.load(generateWords(zenCount), { finite: true });
+  $("#zen-progress").textContent = "0%";
+  $("#zen-wpm").textContent = "0 mpm";
+  clearInterval(zenTick);
+}
+zenEngine.on({
+  start() {
+    zenTick = setInterval(() => {
+      const s = zenEngine.stats();
+      $("#zen-progress").textContent = s.progress + "%";
+      $("#zen-wpm").textContent = s.wpm + " mpm";
+    }, 100);
+  },
+  progress(s) {
+    $("#zen-progress").textContent = s.progress + "%";
+    $("#zen-wpm").textContent = s.wpm + " mpm";
+  },
+  finish(s) { clearInterval(zenTick); showResult(s, "zen"); },
+});
+$$("#zen-options .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#zen-options .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    zenCount = +b.dataset.count;
+    setupZen(); zenEngine.focus();
+  })
+);
+onEnter["solo-zen"] = () => { setupZen(); setTimeout(() => zenEngine.focus(), 30); };
+
+/* ============================================================
+   SOLO — DIFFICILE (chrono, mots à accents / compliqués)
+   ============================================================ */
+const hardEngine = createEngine($("#hard-typing"));
+let hardDuration = 30, hardTimer = null, hardTick = null;
+
+function setupHard() {
+  const enough = Math.max(40, Math.round(hardDuration * 2.5));
+  hardEngine.load(generateHardWords(enough), { finite: false });
+  $("#hard-timer").textContent = hardDuration;
+  $("#hard-wpm").textContent = "0 mpm";
+  clearInterval(hardTick); clearTimeout(hardTimer);
+}
+hardEngine.on({
+  start() {
+    hardTick = setInterval(() => {
+      const s = hardEngine.stats();
+      $("#hard-timer").textContent = Math.max(0, hardDuration - Math.floor(s.elapsedMs / 1000));
+      $("#hard-wpm").textContent = s.wpm + " mpm";
+    }, 100);
+    hardTimer = setTimeout(() => { clearInterval(hardTick); hardEngine.forceFinish(); }, hardDuration * 1000);
+  },
+  progress(s) { $("#hard-wpm").textContent = s.wpm + " mpm"; },
+  finish(s) { clearInterval(hardTick); clearTimeout(hardTimer); showResult({ ...s, elapsedMs: hardDuration * 1000 }, "difficile"); },
+});
+$$("#hard-options .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#hard-options .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    hardDuration = +b.dataset.dur;
+    setupHard(); hardEngine.focus();
+  })
+);
+onEnter["solo-hard"] = () => { setupHard(); setTimeout(() => hardEngine.focus(), 30); };
+
 /* ---------- Tab = recommencer (sur écrans solo) ---------- */
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Tab") return;
   if (currentScreen === "solo-words") { e.preventDefault(); setupWords(); wordsEngine.focus(); }
   else if (currentScreen === "solo-text") { e.preventDefault(); setupText(); textEngine.focus(); }
+  else if (currentScreen === "solo-zen") { e.preventDefault(); setupZen(); zenEngine.focus(); }
+  else if (currentScreen === "solo-hard") { e.preventDefault(); setupHard(); hardEngine.focus(); }
 });
 
 /* ============================================================
@@ -281,7 +354,8 @@ document.addEventListener("keydown", (e) => {
    ============================================================ */
 let lastSoloMode = "solo-words";
 function showResult(s, label) {
-  lastSoloMode = label === "texte" ? "solo-text" : "solo-words";
+  lastSoloMode = label === "texte" ? "solo-text" : label === "zen" ? "solo-zen"
+    : label === "difficile" ? "solo-hard" : "solo-words";
   $("#res-wpm").textContent = fmt(s.wpm);
   $("#res-acc").textContent = fmt(s.accuracy);
   $("#res-chars").textContent = s.correctChars;
@@ -302,10 +376,13 @@ let me = { id: null, name: "" };
 let room = { code: null, mode: "course", isHost: false, players: [] };
 let mpModePick = "course";
 let raceTick = null, lastSent = 0, roundLocalTimer = null, sentFinished = false, amEliminated = false;
+let patateHolder = null, patatePassed = false, patateWord = "";
 
 const MODE_DESC = {
   course: "Tout le monde tape le même texte. Le premier à finir gagne. Barres de progression en direct.",
   elimination: "Manches de 18s. À chaque manche, le joueur le plus lent est éliminé. Le dernier survivant gagne.",
+  patate: "Une bombe passe de joueur en joueur : tape ton mot pour la refiler. Celui qui la tient quand elle explose est éliminé.",
+  hard: "Comme la course, mais avec des mots difficiles et pleins d'accents. Le premier à finir gagne.",
 };
 
 function connect() {
@@ -373,7 +450,12 @@ $("#mp-code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#mp
 /* ----- Salon ----- */
 function renderLobby() {
   $("#lobby-code").textContent = room.code;
-  $("#lobby-mode").textContent = "mode : " + (room.mode === "course" ? "course" : "élimination");
+  // sélecteur de mode : bouton actif = mode courant ; cliquable seulement par l'hôte
+  $$("#lobby-mode-pick .opt").forEach((b) => {
+    b.classList.toggle("active", b.dataset.mpmode === room.mode);
+    b.disabled = !room.isHost;
+  });
+  $("#lobby-mode-note").textContent = room.isHost ? "" : "choisi par l'hôte";
   const ul = $("#lobby-players");
   ul.innerHTML = "";
   room.players.forEach((p) => {
@@ -403,6 +485,12 @@ $("#lobby-ready").addEventListener("click", () => {
   const meP = room.players.find((p) => p.id === me.id);
   sendWs({ type: "ready", ready: !(meP && meP.ready) });
 });
+$$("#lobby-mode-pick .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    if (!room.isHost) return;
+    sendWs({ type: "setmode", mode: b.dataset.mpmode });
+  })
+);
 $("#lobby-start").addEventListener("click", () => sendWs({ type: "start" }));
 $("#lobby-leave").addEventListener("click", () => { sendWs({ type: "leave" }); go("multi-home"); });
 $("#lobby-copy").addEventListener("click", () => {
@@ -417,14 +505,18 @@ function renderTracks(players) {
   wrap.innerHTML = "";
   players.forEach((p) => {
     const t = document.createElement("div");
-    t.className = "track" + (p.finished ? " done" : "") + (p.eliminated ? " eliminated" : "");
+    t.className = "track" + (p.finished ? " done" : "") + (p.eliminated ? " eliminated" : "") + (p.holder ? " holder" : "");
     const isMe = p.id === me.id;
+    const right = p.eliminated ? "éliminé"
+      : p.holder ? "tient la bombe"
+      : room.mode === "patate" ? ""
+      : (p.wpm || 0) + " mpm";
     t.innerHTML = `
       <div class="track-bar">
         <div class="track-fill ${isMe ? "me" : ""}" style="width:${p.progress || 0}%"></div>
         <div class="track-label">
           <span class="tname">${escapeText(p.name)}${isMe ? " (toi)" : ""}</span>
-          <span class="twpm">${p.eliminated ? "éliminé" : (p.wpm || 0) + " mpm"}</span>
+          <span class="twpm">${right}</span>
         </div>
       </div>`;
     wrap.appendChild(t);
@@ -443,16 +535,64 @@ function showCountdown(then) {
   }, 800);
 }
 
-function startCourseClient(textIndex) {
+function startCourseClient(cfg) {
   go("race");
-  $("#race-mode-label").textContent = "course";
+  $("#race-bomb").classList.add("hidden");
+  $("#race-mode-label").textContent = cfg.mode === "hard" ? "difficile" : "course";
   $("#race-info").textContent = "premier arrivé, premier servi";
-  raceEngine.load(TEXTS[textIndex], { finite: true });
+  const text = cfg.mode === "hard" ? generateHardWords(cfg.count, cfg.seed) : TEXTS[cfg.textIndex];
+  raceEngine.load(text, { finite: true });
+  raceEngine.setSpectator(false);
   raceEngine.setBlur(true);
   sentFinished = false;
   $("#race-progress").textContent = "0%";
   $("#race-wpm").textContent = "0 mpm";
   showCountdown(() => { raceEngine.setBlur(false); raceEngine.focus(); startRaceTick(); });
+}
+
+/* ----- Patate chaude ----- */
+function startPatateClient() {
+  go("race");
+  $("#race-bomb").classList.remove("hidden");
+  $("#race-mode-label").textContent = "patate chaude";
+  $("#race-info").textContent = "préparez-vous…";
+  $("#race-progress").textContent = "";
+  $("#race-wpm").textContent = "";
+  patateHolder = null; patatePassed = false; patateWord = "";
+  raceEngine.load("…", { finite: false });
+  raceEngine.setSpectator(true);
+  raceEngine.setBlur(true);
+  $("#race-bomb-fill").style.width = "100%";
+  showCountdown(() => { $("#race-info").textContent = "la bombe arrive…"; raceEngine.setBlur(false); });
+}
+function animateBomb(total, remaining) {
+  const fill = $("#race-bomb-fill");
+  const pct = total > 0 ? Math.max(0, Math.min(100, (remaining / total) * 100)) : 0;
+  fill.style.transition = "none";
+  fill.style.width = pct + "%";
+  void fill.offsetWidth; // force le reflow
+  fill.style.transition = "width " + remaining + "ms linear";
+  fill.style.width = "0%";
+}
+function onPotato(msg) {
+  $("#race-bomb").classList.remove("hidden");
+  patateHolder = msg.holderId;
+  patateWord = msg.word;
+  renderTracks(msg.players.map((p) => ({ ...p, holder: p.id === msg.holderId })));
+  animateBomb(msg.bombTotal, msg.bombRemaining);
+  const holderName = (msg.players.find((p) => p.id === msg.holderId) || {}).name || "";
+  raceEngine.load(msg.word, { finite: false });
+  if (msg.holderId === me.id && !amEliminated) {
+    patatePassed = false;
+    $("#race-info").textContent = "à toi ! tape le mot";
+    raceEngine.setSpectator(false);
+    raceEngine.setBlur(false);
+    raceEngine.focus();
+  } else {
+    $("#race-info").textContent = "au tour de " + holderName;
+    raceEngine.setSpectator(true);
+    raceEngine.setBlur(false);
+  }
 }
 function startElimClient(seed, count, duration, round) {
   go("race");
@@ -487,7 +627,18 @@ function startElimClient(seed, count, duration, round) {
 raceEngine.on({
   start() {},
   progress(s) {
-    $("#race-progress").textContent = (room.mode === "course" ? s.progress + "%" : s.correctChars + " car.");
+    if (room.mode === "patate") {
+      // refile la patate dès que le mot est tapé entièrement et correctement
+      if (patateHolder === me.id && !patatePassed && !amEliminated && patateWord && s.correctChars >= patateWord.length) {
+        patatePassed = true;
+        raceEngine.setSpectator(true);
+        $("#race-info").textContent = "passé !";
+        sendWs({ type: "pass" });
+      }
+      return;
+    }
+    const pct = room.mode === "course" || room.mode === "hard";
+    $("#race-progress").textContent = pct ? s.progress + "%" : s.correctChars + " car.";
     $("#race-wpm").textContent = s.wpm + " mpm";
     const t = now();
     if (t - lastSent > 180) {
@@ -496,7 +647,7 @@ raceEngine.on({
     }
   },
   finish(s) {
-    if (room.mode === "course" && !sentFinished) {
+    if ((room.mode === "course" || room.mode === "hard") && !sentFinished) {
       sentFinished = true;
       sendWs({ type: "finished", wpm: s.wpm, accuracy: s.accuracy, time: s.elapsedMs });
       $("#race-info").textContent = "terminé — en attente des autres…";
@@ -508,7 +659,7 @@ function startRaceTick() {
   raceTick = setInterval(() => {
     if (raceEngine.isFinished()) return;
     const s = raceEngine.stats();
-    $("#race-progress").textContent = (room.mode === "course" ? s.progress + "%" : s.correctChars + " car.");
+    $("#race-progress").textContent = (room.mode === "course" || room.mode === "hard" ? s.progress + "%" : s.correctChars + " car.");
     $("#race-wpm").textContent = s.wpm + " mpm";
   }, 150);
 }
@@ -520,8 +671,9 @@ function showMpResult(data) {
   const ol = $("#mpres-ranking");
   ol.innerHTML = "";
   const title = $("#mpres-title");
-  if (data.mode === "course") {
-    title.textContent = "course terminée";
+  const titles = { course: "course terminée", hard: "difficile terminée", elimination: "élimination terminée", patate: "patate chaude terminée" };
+  title.textContent = titles[data.mode] || "résultats";
+  if (data.mode === "course" || data.mode === "hard") {
     data.ranking.forEach((r, i) => {
       const li = document.createElement("li");
       const stat = r.finished ? `${r.wpm} mpm · ${r.accuracy}% · ${(r.time / 1000).toFixed(1)}s`
@@ -530,7 +682,6 @@ function showMpResult(data) {
       ol.appendChild(li);
     });
   } else {
-    title.textContent = "élimination terminée";
     data.ranking.forEach((r) => {
       const li = document.createElement("li");
       const medal = r.place === 1 ? "vainqueur" : r.place + "ᵉ";
@@ -551,6 +702,7 @@ function handleServer(msg) {
       renderLobby(); go("lobby");
       break;
     case "players":
+      if (msg.mode) room.mode = msg.mode;
       room.players = msg.players;
       if (currentScreen === "lobby") renderLobby();
       break;
@@ -564,8 +716,13 @@ function handleServer(msg) {
       // la manche arrive : on prépare l'écran (le start arrive juste après)
       break;
     case "start":
-      if (msg.mode === "course") { amEliminated = false; startCourseClient(msg.textIndex); }
+      if (msg.mode === "course") { amEliminated = false; startCourseClient({ mode: "course", textIndex: msg.textIndex }); }
+      else if (msg.mode === "hard") { amEliminated = false; startCourseClient({ mode: "hard", seed: msg.seed, count: msg.count }); }
+      else if (msg.mode === "patate") { startPatateClient(); }
       else startElimClient(msg.seed, msg.count, msg.duration, msg.round);
+      break;
+    case "potato":
+      onPotato(msg);
       break;
     case "update":
       renderTracks(msg.players);
@@ -573,6 +730,8 @@ function handleServer(msg) {
     case "roundEnd": {
       if (msg.eliminatedId === me.id) amEliminated = true;
       clearTimeout(roundLocalTimer); clearInterval(raceTick);
+      raceEngine.setSpectator(true);
+      if (room.mode === "patate") { const f = $("#race-bomb-fill"); f.style.transition = "none"; f.style.width = "0%"; }
       renderTracks(msg.standings.map((s) => ({ ...s, progress: 0 })));
       const suffix = msg.eliminatedId === me.id ? " — tu es éliminé !" : "";
       $("#race-info").textContent = `${escapeText(msg.eliminated)} éliminé · ${msg.remaining} restant(s)${suffix}`;

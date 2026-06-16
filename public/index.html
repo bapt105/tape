@@ -21,7 +21,7 @@
     <!-- ====================== ACCUEIL ====================== -->
     <section class="screen active" id="screen-home">
       <h1 class="title">tape<span>_</span></h1>
-      <p class="subtitle">jeu de dactylographie minimaliste</p>
+      <p class="subtitle">jeu de dactylographie</p>
       <div class="menu">
         <button class="card" data-go="solo-words">
           <span class="card-title">mots courants</span>
@@ -30,6 +30,14 @@
         <button class="card" data-go="solo-text">
           <span class="card-title">texte</span>
           <span class="card-desc">recopie un texte du début à la fin</span>
+        </button>
+        <button class="card" data-go="solo-zen">
+          <span class="card-title">zen</span>
+          <span class="card-desc">sans chrono, finis un nombre de mots à ton rythme</span>
+        </button>
+        <button class="card" data-go="solo-hard">
+          <span class="card-title">difficile</span>
+          <span class="card-desc">mots compliqués et pleins d'accents</span>
         </button>
         <button class="card" data-go="multi-home">
           <span class="card-title">multijoueur</span>
@@ -72,6 +80,43 @@
       <p class="hint">Clique dans la zone et recopie le texte. <kbd>Tab</kbd> pour recommencer.</p>
     </section>
 
+    <!-- ====================== SOLO : ZEN ====================== -->
+    <section class="screen" id="screen-solo-zen">
+      <div class="options" id="zen-options">
+        <span class="opt-label">mots</span>
+        <button class="opt" data-count="25">25</button>
+        <button class="opt active" data-count="50">50</button>
+        <button class="opt" data-count="100">100</button>
+      </div>
+      <div class="stats-live">
+        <span id="zen-progress">0%</span>
+        <span id="zen-wpm">0 mpm</span>
+      </div>
+      <div class="typing" id="zen-typing" tabindex="0">
+        <div class="words" id="zen-stream"></div>
+      </div>
+      <p class="hint">Pas de chrono : finis les mots à ton rythme. <kbd>Tab</kbd> pour recommencer.</p>
+    </section>
+
+    <!-- ====================== SOLO : DIFFICILE ====================== -->
+    <section class="screen" id="screen-solo-hard">
+      <div class="options" id="hard-options">
+        <span class="opt-label">durée</span>
+        <button class="opt" data-dur="15">15s</button>
+        <button class="opt active" data-dur="30">30s</button>
+        <button class="opt" data-dur="60">60s</button>
+        <button class="opt" data-dur="120">120s</button>
+      </div>
+      <div class="stats-live">
+        <span id="hard-timer">30</span>
+        <span id="hard-wpm">0 mpm</span>
+      </div>
+      <div class="typing text-mode" id="hard-typing" tabindex="0">
+        <div class="words" id="hard-stream"></div>
+      </div>
+      <p class="hint">Mots difficiles, pleins d'accents. <kbd>Tab</kbd> pour recommencer.</p>
+    </section>
+
     <!-- ====================== RÉSULTAT SOLO ====================== -->
     <section class="screen" id="screen-result">
       <div class="result">
@@ -108,6 +153,8 @@
             <div class="mode-pick" id="mp-mode-pick">
               <button class="opt active" data-mpmode="course">course</button>
               <button class="opt" data-mpmode="elimination">élimination</button>
+              <button class="opt" data-mpmode="patate">patate chaude</button>
+              <button class="opt" data-mpmode="hard">difficile</button>
             </div>
             <p class="mode-desc" id="mp-mode-desc"></p>
             <button class="btn" id="mp-create">créer</button>
@@ -132,7 +179,16 @@
       <div class="lobby-code">code&nbsp;: <b id="lobby-code">—</b>
         <button class="link" id="lobby-copy" title="Copier">copier</button>
       </div>
-      <div class="lobby-mode" id="lobby-mode">mode : course</div>
+      <div class="lobby-mode-row">
+        <span class="opt-label">mode</span>
+        <div class="mode-pick" id="lobby-mode-pick">
+          <button class="opt" data-mpmode="course">course</button>
+          <button class="opt" data-mpmode="elimination">élimination</button>
+          <button class="opt" data-mpmode="patate">patate chaude</button>
+          <button class="opt" data-mpmode="hard">difficile</button>
+        </div>
+        <span class="lobby-mode-note" id="lobby-mode-note"></span>
+      </div>
       <ul class="players" id="lobby-players"></ul>
       <div class="lobby-actions">
         <button class="btn" id="lobby-ready">je suis prêt</button>
@@ -148,6 +204,7 @@
         <span id="race-mode-label">course</span>
         <span id="race-info"></span>
       </div>
+      <div class="bomb hidden" id="race-bomb"><div class="bomb-fill" id="race-bomb-fill"></div></div>
       <div class="tracks" id="race-tracks"></div>
       <div class="stats-live">
         <span id="race-progress">0%</span>
@@ -172,7 +229,8 @@
   </main>
 
   <footer class="foot">
-    <span>tape_ — minimal typing</span>
+    <span class="foot-logo">TAPE<span>_</span></span>
+    <span class="foot-credit">créé par baptiste jacquet</span>
   </footer>
 
   <script src="words.js"></script>
