@@ -31,7 +31,19 @@ function saveWords() {
   try { fs.writeFileSync(WORDS_FILE, JSON.stringify(WORDS, null, 2)); }
   catch (e) { console.error("[saveWords]", e); }
 }
+// Supprime les doublons de chaque liste (garde le 1er, conserve l'ordre).
+// Renvoie true si au moins un doublon a été retiré.
+function dedupeAll() {
+  let changed = false;
+  for (const key of ["common", "hard", "texts"]) {
+    const seen = new Set(), out = [];
+    for (const v of WORDS[key]) { if (!seen.has(v)) { seen.add(v); out.push(v); } }
+    if (out.length !== WORDS[key].length) { WORDS[key] = out; changed = true; }
+  }
+  return changed;
+}
 loadWords();
+if (dedupeAll()) saveWords(); // nettoie d'éventuels doublons hérités au démarrage
 
 // Port/IP d'écoute :
 // - AlwaysData fournit ALWAYSDATA_HTTPD_PORT / ALWAYSDATA_HTTPD_IP
@@ -74,23 +86,30 @@ const server = http.createServer((req, res) => {
       if (msg.password !== ADMIN_PASSWORD) return sendJson(res, 403, { error: "mot de passe incorrect" });
 
       const listName = msg.list; // "common" | "hard" | "texts"
-      if ((msg.action === "add" || msg.action === "remove") && !WORDS[listName]) {
+      const needsList = msg.action === "add" || msg.action === "remove" || msg.action === "edit";
+      if (needsList && !WORDS[listName]) {
         return sendJson(res, 400, { error: "liste inconnue" });
       }
 
-      let changed = false;
+      let changed = false, message = "";
       if (msg.action === "add") {
         const value = (msg.value || "").toString().trim();
-        if (value) {
-          if (listName === "texts") {
-            // un texte = une entrée complète (paragraphe)
-            if (!WORDS.texts.includes(value)) { WORDS.texts.push(value); changed = true; }
-          } else {
-            // mots : on accepte plusieurs mots séparés par des espaces
-            for (const w of value.split(/\s+/).filter(Boolean)) {
-              if (!WORDS[listName].includes(w)) { WORDS[listName].push(w); changed = true; }
-            }
+        if (!value) {
+          message = "rien à ajouter";
+        } else if (listName === "texts") {
+          // un texte = une entrée complète (paragraphe)
+          if (WORDS.texts.includes(value)) message = "ce texte existe déjà";
+          else { WORDS.texts.push(value); changed = true; message = "texte ajouté ✓"; }
+        } else {
+          // mots : on accepte plusieurs mots séparés par des espaces ; anti-doublon
+          let added = 0, dup = 0;
+          for (const w of value.split(/\s+/).filter(Boolean)) {
+            if (WORDS[listName].includes(w)) dup++;
+            else { WORDS[listName].push(w); added++; changed = true; }
           }
+          if (added && dup) message = `${added} ajouté(s), ${dup} déjà présent(s)`;
+          else if (added) message = added > 1 ? `${added} mots ajoutés ✓` : "ajouté ✓";
+          else message = dup > 1 ? "déjà présents" : "déjà présent";
         }
       } else if (msg.action === "remove") {
         const value = (msg.value || "").toString();
@@ -101,11 +120,23 @@ const server = http.createServer((req, res) => {
         }
         changed = filtered.length !== WORDS[listName].length;
         WORDS[listName] = filtered;
+        message = "supprimé ✓";
+      } else if (msg.action === "edit") {
+        // remplace une entrée existante (utilisé pour modifier un texte)
+        const oldValue = (msg.oldValue || "").toString();
+        const value = (msg.value || "").toString().trim();
+        if (!value) return sendJson(res, 400, { error: "le contenu ne peut pas être vide" });
+        const idx = WORDS[listName].indexOf(oldValue);
+        if (idx === -1) return sendJson(res, 400, { error: "introuvable (déjà modifié ?)" });
+        const dup = WORDS[listName].indexOf(value);
+        if (dup !== -1 && dup !== idx) return sendJson(res, 400, { error: "existe déjà à l'identique" });
+        if (WORDS[listName][idx] !== value) { WORDS[listName][idx] = value; changed = true; }
+        message = changed ? "modifié ✓" : "aucun changement";
       }
-      // action "check" (ou sans modif) : on renvoie simplement les listes à jour
+      // action "check" (connexion) : on renvoie juste les listes, sans message
 
       if (changed) saveWords();
-      return sendJson(res, 200, WORDS);
+      return sendJson(res, 200, { lists: WORDS, message });
     });
     return;
   }

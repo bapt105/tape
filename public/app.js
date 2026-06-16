@@ -812,11 +812,12 @@ function refreshCurrentSolo() {
 const adminOverlay = $("#admin-overlay");
 let adminPassword = "";                                  // mémorisé après connexion réussie
 let adminList = "common";                                // liste active dans le panneau
+let adminSearch = "";                                    // texte de recherche (filtre la liste)
 let adminData = { common: [], hard: [], texts: [] };     // dernières listes connues
 const ADMIN_META = {
   common: { hint: "Mots du mode « mots courants » (aussi patate chaude et élimination). Tu peux en ajouter plusieurs séparés par des espaces.", ph: "ex : bonjour maison soleil" },
   hard:   { hint: "Mots du mode « difficile ». Plusieurs mots possibles, séparés par des espaces.", ph: "ex : anticonstitutionnellement" },
-  texts:  { hint: "Textes du mode « texte ». Un texte (paragraphe) complet par entrée.", ph: "Colle ici un texte complet…" },
+  texts:  { hint: "Textes du mode « texte ». Modifie un texte directement dans son cadre puis « enregistrer ».", ph: "Colle ici un nouveau texte complet…" },
 };
 
 function openAdmin() {
@@ -852,10 +853,11 @@ async function adminLogin() {
   const { ok, data } = await adminRequest({ password: pass, action: "check" });
   if (!ok) { $("#admin-error").textContent = data.error || "mot de passe incorrect"; return; }
   adminPassword = pass;
-  adminData = data;
-  applyWordData(data);
+  adminData = data.lists;
+  applyWordData(data.lists);
   $("#admin-login").classList.add("hidden");
   $("#admin-panel").classList.remove("hidden");
+  adminSearch = ""; $("#admin-search").value = "";
   renderAdminList();
 }
 
@@ -863,29 +865,63 @@ function renderAdminList() {
   const meta = ADMIN_META[adminList];
   $("#admin-list-hint").textContent = meta.hint;
   $("#admin-input").placeholder = meta.ph;
-  const items = adminData[adminList] || [];
-  $("#admin-count").textContent = items.length + (adminList === "texts" ? " texte(s)" : " mot(s)");
+  const all = adminData[adminList] || [];
+  const q = adminSearch.trim().toLowerCase();
+  const items = q ? all.filter((v) => v.toLowerCase().includes(q)) : all;
+  const unit = adminList === "texts" ? "texte(s)" : "mot(s)";
+  $("#admin-count").textContent = q
+    ? `${items.length} affiché(s) sur ${all.length} ${unit}`
+    : `${all.length} ${unit}`;
   const wrap = $("#admin-list");
   wrap.innerHTML = "";
-  items.forEach((val) => {
-    const row = document.createElement("div");
-    row.className = "admin-item" + (adminList === "texts" ? " is-text" : "");
-    const span = document.createElement("span");
-    span.className = "admin-item-val";
-    span.textContent = val;
-    const del = document.createElement("button");
-    del.className = "admin-del"; del.textContent = "×"; del.title = "supprimer";
-    del.addEventListener("click", () => adminRemove(val));
-    row.appendChild(span); row.appendChild(del);
-    wrap.appendChild(row);
-  });
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "admin-empty";
+    empty.textContent = q ? "aucun résultat pour « " + adminSearch.trim() + " »" : "liste vide";
+    wrap.appendChild(empty);
+    return;
+  }
+  items.forEach((val) => wrap.appendChild(adminList === "texts" ? buildTextItem(val) : buildWordItem(val)));
+}
+
+// Un mot : libellé + bouton supprimer
+function buildWordItem(val) {
+  const row = document.createElement("div");
+  row.className = "admin-item";
+  const span = document.createElement("span");
+  span.className = "admin-item-val";
+  span.textContent = val;
+  const del = document.createElement("button");
+  del.className = "admin-del"; del.textContent = "×"; del.title = "supprimer";
+  del.addEventListener("click", () => adminRemove(val));
+  row.appendChild(span); row.appendChild(del);
+  return row;
+}
+
+// Un texte : bloc-note éditable + « enregistrer » + supprimer
+function buildTextItem(val) {
+  const row = document.createElement("div");
+  row.className = "admin-item is-text";
+  const ta = document.createElement("textarea");
+  ta.className = "admin-text-edit"; ta.value = val; ta.rows = 3;
+  const actions = document.createElement("div");
+  actions.className = "admin-text-actions";
+  const save = document.createElement("button");
+  save.className = "btn admin-save"; save.textContent = "enregistrer";
+  save.addEventListener("click", () => adminEdit(val, ta.value));
+  const del = document.createElement("button");
+  del.className = "admin-del"; del.textContent = "×"; del.title = "supprimer";
+  del.addEventListener("click", () => adminRemove(val));
+  actions.appendChild(save); actions.appendChild(del);
+  row.appendChild(ta); row.appendChild(actions);
+  return row;
 }
 
 function adminStatus(text, isErr) {
   const el = $("#admin-status");
   el.textContent = text;
   el.classList.toggle("err", !!isErr);
-  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 2000);
+  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 2200);
 }
 
 async function adminAdd() {
@@ -893,17 +929,28 @@ async function adminAdd() {
   if (!value) return;
   const { ok, data } = await adminRequest({ password: adminPassword, action: "add", list: adminList, value });
   if (!ok) { adminStatus(data.error || "erreur", true); return; }
-  adminData = data; applyWordData(data);
-  $("#admin-input").value = "";
+  adminData = data.lists; applyWordData(data.lists);
+  // on ne vide le champ que si quelque chose a réellement été ajouté
+  if (!/déjà/.test(data.message || "")) $("#admin-input").value = "";
   renderAdminList();
-  adminStatus("ajouté ✓");
+  adminStatus(data.message || "ajouté ✓", /déjà/.test(data.message || ""));
 }
 async function adminRemove(value) {
   const { ok, data } = await adminRequest({ password: adminPassword, action: "remove", list: adminList, value });
   if (!ok) { adminStatus(data.error || "erreur", true); return; }
-  adminData = data; applyWordData(data);
+  adminData = data.lists; applyWordData(data.lists);
   renderAdminList();
-  adminStatus("supprimé ✓");
+  adminStatus(data.message || "supprimé ✓");
+}
+async function adminEdit(oldValue, newValue) {
+  newValue = (newValue || "").trim();
+  if (!newValue) { adminStatus("le texte ne peut pas être vide", true); return; }
+  if (newValue === oldValue) { adminStatus("aucun changement"); return; }
+  const { ok, data } = await adminRequest({ password: adminPassword, action: "edit", list: adminList, oldValue, value: newValue });
+  if (!ok) { adminStatus(data.error || "erreur", true); return; }
+  adminData = data.lists; applyWordData(data.lists);
+  renderAdminList();
+  adminStatus(data.message || "modifié ✓");
 }
 
 $("#admin-open").addEventListener("click", openAdmin);
@@ -916,12 +963,14 @@ $("#admin-input").addEventListener("keydown", (e) => {
   // Entrée = ajouter (sauf pour les textes, où Entrée sert à aller à la ligne)
   if (e.key === "Enter" && !e.shiftKey && adminList !== "texts") { e.preventDefault(); adminAdd(); }
 });
+$("#admin-search").addEventListener("input", (e) => { adminSearch = e.target.value; renderAdminList(); });
 $$("#admin-tabs .opt").forEach((b) =>
   b.addEventListener("click", () => {
     $$("#admin-tabs .opt").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     adminList = b.dataset.list;
     $("#admin-input").value = "";
+    adminSearch = ""; $("#admin-search").value = ""; // la recherche repart à zéro par onglet
     renderAdminList();
   })
 );

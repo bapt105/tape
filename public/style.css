@@ -312,19 +312,36 @@ kbd {
 }
 .admin-add textarea:focus { border-color: var(--accent); }
 .admin-add .btn { white-space: nowrap; }
+.admin-search {
+  width: 100%; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  padding: 9px 12px; border-radius: 8px; font-size: .95rem; outline: none;
+  font-family: inherit; margin-bottom: 8px;
+}
+.admin-search:focus { border-color: var(--accent); }
 .admin-count { color: var(--muted); font-size: .75rem; margin-bottom: 8px; }
 .admin-list { display: flex; flex-direction: column; gap: 6px; max-height: 36vh; overflow-y: auto; }
+.admin-empty { color: var(--muted); font-size: .85rem; padding: 8px 2px; }
 .admin-item {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
 }
 .admin-item-val { font-size: .9rem; word-break: break-word; }
-.admin-item.is-text .admin-item-val { font-size: .82rem; color: var(--muted); line-height: 1.5; }
 .admin-del {
   flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px;
   color: var(--muted); font-size: 1.2rem; line-height: 1;
 }
 .admin-del:hover { color: var(--error); background: var(--error-bg); }
+
+/* Texte éditable (bloc-note) */
+.admin-item.is-text { flex-direction: column; align-items: stretch; gap: 8px; }
+.admin-text-edit {
+  width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  padding: 8px 10px; border-radius: 6px; font-size: .82rem; line-height: 1.5;
+  font-family: inherit; resize: vertical; min-height: 72px; outline: none;
+}
+.admin-text-edit:focus { border-color: var(--accent); }
+.admin-text-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.admin-save { padding: 6px 14px; font-size: .82rem; }
 .admin-status { font-size: .8rem; color: var(--good); margin-top: 10px; min-height: 1.1em; }
 .admin-status.err { color: var(--error); }
 
