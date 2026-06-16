@@ -1,0 +1,332 @@
+/* ============================================================
+   tape_ — serveur
+   - sert les fichiers statiques du dossier /public
+   - gère le multijoueur temps réel (WebSocket) : salons, course, élimination
+   ============================================================ */
+
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const { WebSocketServer } = require("ws");
+const { TEXTS_COUNT } = require("./public/words.js");
+
+// Port/IP d'écoute :
+// - AlwaysData fournit ALWAYSDATA_HTTPD_PORT / ALWAYSDATA_HTTPD_IP
+// - Render/Railway/Heroku fournissent PORT
+// - en local : 3000 sur toutes les interfaces
+const PORT = process.env.ALWAYSDATA_HTTPD_PORT || process.env.PORT || 3000;
+const HOST = process.env.ALWAYSDATA_HTTPD_IP || process.env.HOST || "0.0.0.0";
+const PUBLIC = path.join(__dirname, "public");
+
+/* ---------- Serveur HTTP : fichiers statiques ---------- */
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
+
+const server = http.createServer((req, res) => {
+  let urlPath = decodeURIComponent(req.url.split("?")[0]);
+  if (urlPath === "/") urlPath = "/index.html";
+  const filePath = path.join(PUBLIC, path.normalize(urlPath));
+
+  // empêche de sortir du dossier public
+  if (!filePath.startsWith(PUBLIC)) {
+    res.writeHead(403); res.end("403"); return;
+  }
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(404); res.end("404 — page introuvable"); return; }
+    res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream" });
+    res.end(data);
+  });
+});
+
+/* ---------- Multijoueur ---------- */
+const wss = new WebSocketServer({ server });
+const rooms = new Map(); // code -> room
+let pid = 0;
+
+const COURSE_GRACE_MS = 45000;          // temps max après le 1er arrivé (course)
+const ELIM_COUNT = 50;                   // nb de mots par manche (élimination)
+const ELIM_DURATION_MS = 18000;          // durée d'une manche
+const ELIM_GAP_MS = 3500;                // pause entre les manches
+
+function code4() {
+  const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let c;
+  do { c = Array.from({ length: 4 }, () => A[Math.floor(Math.random() * A.length)]).join(""); }
+  while (rooms.has(c));
+  return c;
+}
+
+function send(ws, obj) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+function broadcast(room, obj) {
+  for (const p of room.players.values()) send(p.ws, obj);
+}
+
+function playerList(room) {
+  return [...room.players.values()].map((p) => ({
+    id: p.id, name: p.name, ready: p.ready, host: p.id === room.hostId,
+    eliminated: p.eliminated,
+  }));
+}
+function raceState(room) {
+  return [...room.players.values()].map((p) => ({
+    id: p.id, name: p.name, progress: p.progress, wpm: p.wpm,
+    finished: p.finished, eliminated: p.eliminated,
+  }));
+}
+
+function startCountdownThenPlay(room) {
+  room.state = "countdown";
+  broadcast(room, { type: "countdown" });
+  // les clients affichent 3-2-1 (3s) ; on lance ensuite la manche
+  setTimeout(() => {
+    if (!rooms.has(room.code)) return;
+    if (room.mode === "course") startCourse(room);
+    else startElimRound(room);
+  }, 3200);
+}
+
+/* ----- COURSE ----- */
+function startCourse(room) {
+  room.state = "playing";
+  room.textIndex = Math.floor(Math.random() * TEXTS_COUNT);
+  room.startedAt = Date.now();
+  room.firstFinishTimer = null;
+  for (const p of room.players.values()) {
+    p.progress = 0; p.wpm = 0; p.finished = false; p.finishTime = null; p.rank = null;
+  }
+  broadcast(room, { type: "start", mode: "course", textIndex: room.textIndex });
+}
+function endCourse(room) {
+  if (room.state !== "playing") return;
+  room.state = "ended";
+  if (room.firstFinishTimer) clearTimeout(room.firstFinishTimer);
+  const players = [...room.players.values()];
+  const ranking = players
+    .map((p) => ({
+      name: p.name,
+      finished: p.finished,
+      time: p.finishTime,
+      wpm: p.wpm,
+      accuracy: p.accuracy || 0,
+      progress: p.progress,
+    }))
+    .sort((a, b) => {
+      if (a.finished && b.finished) return a.time - b.time;
+      if (a.finished) return -1;
+      if (b.finished) return 1;
+      return b.progress - a.progress;
+    });
+  broadcast(room, { type: "result", mode: "course", ranking });
+  resetReady(room);
+}
+
+/* ----- ÉLIMINATION ----- */
+function startElimRound(room) {
+  room.state = "playing";
+  room.round = (room.round || 0) + 1;
+  room.seed = Math.floor(Math.random() * 1e9);
+  for (const p of room.players.values()) { p.score = 0; p.progress = 0; p.wpm = 0; }
+  broadcast(room, {
+    type: "start", mode: "elimination",
+    seed: room.seed, count: ELIM_COUNT, duration: ELIM_DURATION_MS, round: room.round,
+  });
+  room.roundTimer = setTimeout(() => evaluateElim(room), ELIM_DURATION_MS + 800);
+}
+function evaluateElim(room) {
+  if (room.state !== "playing") return;
+  const active = [...room.players.values()].filter((p) => !p.eliminated);
+  if (active.length <= 1) { finishElim(room); return; }
+  // élimine le score le plus bas (égalité : wpm le plus bas)
+  active.sort((a, b) => (a.score - b.score) || (a.wpm - b.wpm));
+  const out = active[0];
+  out.eliminated = true;
+  room.elimOrder.push(out.name);
+  const remaining = active.length - 1;
+  broadcast(room, {
+    type: "roundEnd", round: room.round,
+    eliminated: out.name, eliminatedId: out.id,
+    standings: active.map((p) => ({ id: p.id, name: p.name, score: p.score, wpm: p.wpm, eliminated: p.eliminated })),
+    remaining,
+  });
+  if (remaining <= 1) { setTimeout(() => finishElim(room), 1500); }
+  else { setTimeout(() => { if (rooms.has(room.code)) startCountdownThenPlay(room); }, ELIM_GAP_MS); }
+}
+function finishElim(room) {
+  room.state = "ended";
+  const winner = [...room.players.values()].find((p) => !p.eliminated);
+  const ranking = [];
+  if (winner) ranking.push({ name: winner.name, place: 1 });
+  // les éliminés du plus récent au plus ancien
+  for (let i = room.elimOrder.length - 1; i >= 0; i--) {
+    ranking.push({ name: room.elimOrder[i], place: ranking.length + 1 });
+  }
+  broadcast(room, { type: "result", mode: "elimination", ranking });
+  resetReady(room);
+}
+
+function resetReady(room) {
+  for (const p of room.players.values()) { p.ready = false; }
+}
+function resetRoom(room) {
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+  if (room.firstFinishTimer) clearTimeout(room.firstFinishTimer);
+  room.state = "lobby"; room.round = 0; room.elimOrder = [];
+  for (const p of room.players.values()) {
+    p.ready = false; p.eliminated = false; p.progress = 0; p.wpm = 0;
+    p.finished = false; p.score = 0;
+  }
+}
+
+function tryStart(room, byId) {
+  if (room.state !== "lobby") return;
+  if (room.hostId !== byId) return;
+  const players = [...room.players.values()];
+  if (players.length < 2) { send(room.players.get(byId).ws, { type: "error", message: "Il faut au moins 2 joueurs." }); return; }
+  if (!players.every((p) => p.ready)) { send(room.players.get(byId).ws, { type: "error", message: "Tous les joueurs ne sont pas prêts." }); return; }
+  room.elimOrder = []; room.round = 0;
+  startCountdownThenPlay(room);
+}
+
+wss.on("connection", (ws) => {
+  ws.player = null;
+  ws.roomCode = null;
+
+  ws.on("message", (raw) => {
+    let msg; try { msg = JSON.parse(raw); } catch { return; }
+    const room = ws.roomCode ? rooms.get(ws.roomCode) : null;
+
+    switch (msg.type) {
+      case "create": {
+        const code = code4();
+        const id = ++pid;
+        const player = mkPlayer(id, msg.name, ws);
+        const r = {
+          code, hostId: id, mode: msg.mode === "elimination" ? "elimination" : "course",
+          state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]),
+        };
+        rooms.set(code, r);
+        ws.player = player; ws.roomCode = code;
+        send(ws, { type: "joined", code, you: id, mode: r.mode, isHost: true, players: playerList(r) });
+        break;
+      }
+      case "join": {
+        const r = rooms.get((msg.code || "").toUpperCase());
+        if (!r) { send(ws, { type: "error", message: "Salon introuvable." }); return; }
+        if (r.state !== "lobby") { send(ws, { type: "error", message: "La partie a déjà commencé." }); return; }
+        if (r.players.size >= 8) { send(ws, { type: "error", message: "Salon complet (8 max)." }); return; }
+        const id = ++pid;
+        const player = mkPlayer(id, msg.name, ws);
+        r.players.set(id, player);
+        ws.player = player; ws.roomCode = r.code;
+        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, isHost: false, players: playerList(r) });
+        broadcast(r, { type: "players", players: playerList(r) });
+        break;
+      }
+      case "ready": {
+        if (!room || !ws.player) return;
+        ws.player.ready = !!msg.ready;
+        broadcast(room, { type: "players", players: playerList(room) });
+        break;
+      }
+      case "start": {
+        if (room && ws.player) tryStart(room, ws.player.id);
+        break;
+      }
+      case "progress": {
+        if (!room || !ws.player || room.state !== "playing") return;
+        const p = ws.player;
+        p.progress = msg.progress || 0;
+        p.wpm = msg.wpm || 0;
+        if (typeof msg.chars === "number") p.score = msg.chars;
+        broadcast(room, { type: "update", players: raceState(room) });
+        break;
+      }
+      case "finished": {
+        if (!room || !ws.player || room.mode !== "course" || room.state !== "playing") return;
+        const p = ws.player;
+        if (p.finished) return;
+        p.finished = true;
+        p.finishTime = Date.now() - room.startedAt;
+        p.wpm = msg.wpm || p.wpm;
+        p.accuracy = msg.accuracy || 0;
+        p.progress = 100;
+        broadcast(room, { type: "update", players: raceState(room) });
+        const all = [...room.players.values()];
+        if (all.every((x) => x.finished)) { endCourse(room); }
+        else if (!room.firstFinishTimer) {
+          room.firstFinishTimer = setTimeout(() => endCourse(room), COURSE_GRACE_MS);
+        }
+        break;
+      }
+      case "rematch": {
+        if (!room) return;
+        resetRoom(room);
+        broadcast(room, { type: "lobby", mode: room.mode, players: playerList(room) });
+        break;
+      }
+      case "leave": {
+        leave(ws);
+        break;
+      }
+    }
+  });
+
+  ws.on("close", () => leave(ws));
+});
+
+function mkPlayer(id, name, ws) {
+  name = (name || "joueur").toString().slice(0, 14).trim() || "joueur";
+  return {
+    id, name, ws, ready: false, progress: 0, wpm: 0, accuracy: 0,
+    finished: false, finishTime: null, eliminated: false, score: 0,
+  };
+}
+
+function leave(ws) {
+  const code = ws.roomCode;
+  if (!code) return;
+  const room = rooms.get(code);
+  ws.roomCode = null;
+  if (!room) return;
+  const wasHost = ws.player && room.hostId === ws.player.id;
+  if (ws.player) room.players.delete(ws.player.id);
+  ws.player = null;
+
+  if (room.players.size === 0) {
+    if (room.roundTimer) clearTimeout(room.roundTimer);
+    if (room.firstFinishTimer) clearTimeout(room.firstFinishTimer);
+    rooms.delete(code);
+    return;
+  }
+  // nouvel hôte si besoin
+  if (wasHost) room.hostId = [...room.players.keys()][0];
+
+  if (room.state === "lobby") {
+    broadcast(room, { type: "players", players: playerList(room) });
+  } else if (room.state === "playing") {
+    if (room.mode === "course") {
+      const all = [...room.players.values()];
+      if (all.length && all.every((x) => x.finished)) endCourse(room);
+      else broadcast(room, { type: "update", players: raceState(room) });
+    } else {
+      // élimination : si un seul joueur actif reste, on termine
+      const active = [...room.players.values()].filter((p) => !p.eliminated);
+      if (active.length <= 1) { if (room.roundTimer) clearTimeout(room.roundTimer); finishElim(room); }
+      else broadcast(room, { type: "update", players: raceState(room) });
+    }
+  }
+}
+
+server.listen(PORT, HOST, () => {
+  const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
+  console.log(`\n  tape_  ▸  http://${shown}:${PORT}\n  (Ctrl+C pour arrêter)\n`);
+});

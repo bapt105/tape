@@ -1,0 +1,15 @@
+{
+  "name": "tape-typing",
+  "version": "1.0.0",
+  "description": "Jeu de dactylographie minimaliste (français) — solo + multijoueur en ligne",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

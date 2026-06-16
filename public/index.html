@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tape · jeu de dactylographie</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- En-tête minimaliste -->
+  <header class="bar">
+    <button class="logo" data-go="home">tape<span>_</span></button>
+    <nav class="bar-right">
+      <button class="link" data-go="home">accueil</button>
+      <button class="link" id="theme-toggle" title="Thème clair / sombre">◐</button>
+    </nav>
+  </header>
+
+  <main id="app">
+
+    <!-- ====================== ACCUEIL ====================== -->
+    <section class="screen active" id="screen-home">
+      <h1 class="title">tape<span>_</span></h1>
+      <p class="subtitle">jeu de dactylographie minimaliste</p>
+      <div class="menu">
+        <button class="card" data-go="solo-words">
+          <span class="card-title">mots courants</span>
+          <span class="card-desc">tape un maximum de mots en temps limité</span>
+        </button>
+        <button class="card" data-go="solo-text">
+          <span class="card-title">texte</span>
+          <span class="card-desc">recopie un texte du début à la fin</span>
+        </button>
+        <button class="card" data-go="multi-home">
+          <span class="card-title">multijoueur</span>
+          <span class="card-desc">affronte tes amis en ligne</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ====================== SOLO : MOTS ====================== -->
+    <section class="screen" id="screen-solo-words">
+      <div class="options" id="words-options">
+        <span class="opt-label">durée</span>
+        <button class="opt" data-dur="15">15s</button>
+        <button class="opt active" data-dur="30">30s</button>
+        <button class="opt" data-dur="60">60s</button>
+        <button class="opt" data-dur="120">120s</button>
+      </div>
+      <div class="stats-live">
+        <span id="words-timer">30</span>
+        <span id="words-wpm">0 mpm</span>
+      </div>
+      <div class="typing" id="words-typing" tabindex="0">
+        <div class="words" id="words-stream"></div>
+      </div>
+      <p class="hint">Clique dans la zone et commence à taper. <kbd>Tab</kbd> pour recommencer.</p>
+    </section>
+
+    <!-- ====================== SOLO : TEXTE ====================== -->
+    <section class="screen" id="screen-solo-text">
+      <div class="options">
+        <button class="opt" id="text-shuffle">↻ autre texte</button>
+      </div>
+      <div class="stats-live">
+        <span id="text-progress">0%</span>
+        <span id="text-wpm">0 mpm</span>
+      </div>
+      <div class="typing" id="text-typing" tabindex="0">
+        <div class="words" id="text-stream"></div>
+      </div>
+      <p class="hint">Clique dans la zone et recopie le texte. <kbd>Tab</kbd> pour recommencer.</p>
+    </section>
+
+    <!-- ====================== RÉSULTAT SOLO ====================== -->
+    <section class="screen" id="screen-result">
+      <div class="result">
+        <div class="result-main">
+          <div class="big"><span id="res-wpm">0</span><small>mpm</small></div>
+          <div class="big"><span id="res-acc">0</span><small>%</small></div>
+        </div>
+        <div class="result-sub">
+          <span><b id="res-chars">0</b> caractères</span>
+          <span><b id="res-time">0</b> s</span>
+          <span><b id="res-mode">—</b></span>
+        </div>
+        <div class="result-actions">
+          <button class="btn" id="res-again">recommencer</button>
+          <button class="btn ghost" data-go="home">accueil</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================== MULTI : ACCUEIL ====================== -->
+    <section class="screen" id="screen-multi-home">
+      <h2 class="title-sm">multijoueur</h2>
+      <div class="conn-status" id="conn-status">connexion au serveur…</div>
+
+      <div class="multi-form">
+        <label class="field">
+          <span>ton pseudo</span>
+          <input type="text" id="mp-name" maxlength="14" placeholder="joueur" autocomplete="off" />
+        </label>
+
+        <div class="multi-split">
+          <div class="multi-block">
+            <h3>créer un salon</h3>
+            <div class="mode-pick" id="mp-mode-pick">
+              <button class="opt active" data-mpmode="course">course</button>
+              <button class="opt" data-mpmode="elimination">élimination</button>
+            </div>
+            <p class="mode-desc" id="mp-mode-desc"></p>
+            <button class="btn" id="mp-create">créer</button>
+          </div>
+
+          <div class="multi-block">
+            <h3>rejoindre</h3>
+            <label class="field">
+              <span>code du salon</span>
+              <input type="text" id="mp-code" maxlength="4" placeholder="ABCD" autocomplete="off" />
+            </label>
+            <button class="btn" id="mp-join">rejoindre</button>
+          </div>
+        </div>
+        <p class="mp-error" id="mp-error"></p>
+      </div>
+    </section>
+
+    <!-- ====================== MULTI : SALON ====================== -->
+    <section class="screen" id="screen-lobby">
+      <h2 class="title-sm">salon</h2>
+      <div class="lobby-code">code&nbsp;: <b id="lobby-code">—</b>
+        <button class="link" id="lobby-copy" title="Copier">copier</button>
+      </div>
+      <div class="lobby-mode" id="lobby-mode">mode : course</div>
+      <ul class="players" id="lobby-players"></ul>
+      <div class="lobby-actions">
+        <button class="btn" id="lobby-ready">je suis prêt</button>
+        <button class="btn primary hidden" id="lobby-start">démarrer</button>
+        <button class="btn ghost" id="lobby-leave">quitter</button>
+      </div>
+      <p class="hint" id="lobby-hint">Quand tout le monde est prêt, l'hôte lance la partie.</p>
+    </section>
+
+    <!-- ====================== MULTI : PARTIE ====================== -->
+    <section class="screen" id="screen-race">
+      <div class="race-head">
+        <span id="race-mode-label">course</span>
+        <span id="race-info"></span>
+      </div>
+      <div class="tracks" id="race-tracks"></div>
+      <div class="stats-live">
+        <span id="race-progress">0%</span>
+        <span id="race-wpm">0 mpm</span>
+      </div>
+      <div class="typing" id="race-typing" tabindex="0">
+        <div class="words" id="race-stream"></div>
+      </div>
+      <div class="countdown" id="race-countdown"></div>
+    </section>
+
+    <!-- ====================== MULTI : RÉSULTAT ====================== -->
+    <section class="screen" id="screen-mp-result">
+      <h2 class="title-sm" id="mpres-title">résultats</h2>
+      <ol class="ranking" id="mpres-ranking"></ol>
+      <div class="result-actions">
+        <button class="btn" id="mpres-again">retour au salon</button>
+        <button class="btn ghost" data-go="home">accueil</button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="foot">
+    <span>tape_ — minimal typing</span>
+  </footer>
+
+  <script src="words.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
