@@ -108,6 +108,13 @@ kbd {
 /* ---------- Mode dans le salon ---------- */
 .lobby-mode-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
 .lobby-mode-note { color: var(--muted); font-size: .75rem; }
+.opt-select {
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  padding: 6px 10px; border-radius: 6px; font-family: inherit; font-size: .85rem;
+  outline: none; max-width: 100%; cursor: pointer;
+}
+.opt-select:focus { border-color: var(--accent); }
+.opt-select:disabled { opacity: .5; cursor: default; }
 
 .stats-live {
   justify-content: space-between; color: var(--accent);

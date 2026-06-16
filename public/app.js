@@ -414,12 +414,23 @@ let ws = null, wsReady = false;
 let me = { id: null, name: "" };
 let room = { code: null, mode: "course", isHost: false, players: [], opts: { lives: 2, elimDur: 18, hardCount: 30 } };
 
-// Réglage proposé selon le mode (rien pour la course)
-const MODE_OPTS = {
-  patate: { key: "lives", label: "vies", values: [1, 2, 3] },
-  elimination: { key: "elimDur", label: "durée", values: [12, 18, 25], suffix: "s" },
-  hard: { key: "hardCount", label: "mots", values: [20, 30, 50] },
-};
+// Réglages proposés selon le mode. Course et élimination ont en plus le choix
+// du « contenu » (texte long / mots courants) et, si texte, lequel.
+function lobbyOptionGroups() {
+  const m = room.mode, groups = [];
+  if (m === "patate") groups.push({ key: "lives", label: "vies", values: [1, 2, 3] });
+  if (m === "elimination") groups.push({ key: "elimDur", label: "durée", values: [12, 18, 25], suffix: "s" });
+  if (m === "hard") groups.push({ key: "hardCount", label: "mots", values: [20, 30, 50] });
+  if (m === "course" || m === "elimination") {
+    groups.push({ key: "content", label: "contenu", values: [
+      { v: "texte", txt: "texte long" }, { v: "mots", txt: "mots courants" },
+    ] });
+    if ((room.opts.content || "texte") === "texte") {
+      groups.push({ key: "textChoice", label: "texte", kind: "text" });
+    }
+  }
+  return groups;
+}
 let mpModePick = "course";
 let raceTick = null, lastSent = 0, roundLocalTimer = null, sentFinished = false, amEliminated = false;
 let patateHolder = null, patatePassed = false, patateWord = "";
@@ -495,21 +506,54 @@ $("#mp-code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#mp
 
 /* ----- Salon ----- */
 function renderLobbyOpts() {
-  const meta = MODE_OPTS[room.mode];
-  const row = $("#lobby-opts-row");
-  if (!meta) { row.style.display = "none"; return; }
-  row.style.display = "";
-  $("#lobby-opts-label").textContent = meta.label;
-  const cur = (room.opts && room.opts[meta.key] != null) ? room.opts[meta.key] : meta.values[0];
-  const pick = $("#lobby-opts-pick");
-  pick.innerHTML = "";
-  meta.values.forEach((v) => {
-    const b = document.createElement("button");
-    b.className = "opt" + (v === cur ? " active" : "");
-    b.textContent = v + (meta.suffix || "");
-    b.disabled = !room.isHost;
-    b.addEventListener("click", () => { if (room.isHost) sendWs({ type: "setopt", key: meta.key, value: v }); });
-    pick.appendChild(b);
+  const wrap = $("#lobby-opts");
+  wrap.innerHTML = "";
+  const groups = lobbyOptionGroups();
+  if (!groups.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  groups.forEach((g) => {
+    const row = document.createElement("div");
+    row.className = "lobby-mode-row";
+    const label = document.createElement("span");
+    label.className = "opt-label";
+    label.textContent = g.label;
+    row.appendChild(label);
+
+    if (g.kind === "text") {
+      // menu déroulant : aléatoire + chaque texte (aperçu tronqué)
+      const sel = document.createElement("select");
+      sel.className = "opt-select";
+      sel.disabled = !room.isHost;
+      const cur = Number.isInteger(room.opts.textChoice) ? room.opts.textChoice : "rand";
+      const optRand = new Option("aléatoire", "rand", false, cur === "rand");
+      sel.appendChild(optRand);
+      TEXTS.forEach((t, i) => {
+        const preview = t.length > 46 ? t.slice(0, 46) + "…" : t;
+        sel.appendChild(new Option(`#${i + 1} — ${preview}`, String(i), false, cur === i));
+      });
+      sel.addEventListener("change", () => {
+        if (!room.isHost) return;
+        const val = sel.value === "rand" ? "rand" : parseInt(sel.value, 10);
+        sendWs({ type: "setopt", key: "textChoice", value: val });
+      });
+      row.appendChild(sel);
+    } else {
+      const pick = document.createElement("div");
+      pick.className = "mode-pick";
+      const cur = room.opts[g.key];
+      g.values.forEach((item) => {
+        const v = typeof item === "object" ? item.v : item;
+        const txt = typeof item === "object" ? item.txt : v + (g.suffix || "");
+        const b = document.createElement("button");
+        b.className = "opt" + (v === cur ? " active" : "");
+        b.textContent = txt;
+        b.disabled = !room.isHost;
+        b.addEventListener("click", () => { if (room.isHost) sendWs({ type: "setopt", key: g.key, value: v }); });
+        pick.appendChild(b);
+      });
+      row.appendChild(pick);
+    }
+    wrap.appendChild(row);
   });
 }
 
@@ -611,7 +655,10 @@ function startCourseClient(cfg) {
   $("#race-bomb").classList.add("hidden");
   $("#race-mode-label").textContent = cfg.mode === "hard" ? "difficile" : "course";
   $("#race-info").textContent = "premier arrivé, premier servi";
-  const text = cfg.mode === "hard" ? generateHardWords(cfg.count, cfg.seed) : TEXTS[cfg.textIndex];
+  let text;
+  if (cfg.mode === "hard") text = generateHardWords(cfg.count, cfg.seed);
+  else if (cfg.content === "mots") text = generateWords(cfg.count, cfg.seed);
+  else text = TEXTS[cfg.textIndex];
   raceEngine.load(text, { finite: true });
   raceEngine.setSpectator(false);
   raceEngine.setBlur(true);
@@ -654,10 +701,13 @@ function onPotato(msg) {
     raceEngine.setBlur(false);
   }
 }
-function startElimClient(seed, count, duration, round) {
+function startElimClient(msg) {
+  const { duration, round } = msg;
   go("race");
   $("#race-mode-label").textContent = "élimination";
-  raceEngine.load(generateWords(count, seed), { finite: false });
+  // contenu : texte long (tout le monde le même) ou mots courants (via graine)
+  const text = msg.content === "texte" ? TEXTS[msg.textIndex] : generateWords(msg.count, msg.seed);
+  raceEngine.load(text, { finite: false });
   raceEngine.setSpectator(amEliminated);
   clearTimeout(roundLocalTimer);
 
@@ -778,10 +828,10 @@ function handleServer(msg) {
       // la manche arrive : on prépare l'écran (le start arrive juste après)
       break;
     case "start":
-      if (msg.mode === "course") { amEliminated = false; startCourseClient({ mode: "course", textIndex: msg.textIndex }); }
+      if (msg.mode === "course") { amEliminated = false; startCourseClient({ mode: "course", content: msg.content, textIndex: msg.textIndex, seed: msg.seed, count: msg.count }); }
       else if (msg.mode === "hard") { amEliminated = false; startCourseClient({ mode: "hard", seed: msg.seed, count: msg.count }); }
       else if (msg.mode === "patate") { startPatateClient(); }
-      else startElimClient(msg.seed, msg.count, msg.duration, msg.round);
+      else startElimClient(msg);
       break;
     case "potato":
       onPotato(msg);

@@ -162,16 +162,28 @@ const rooms = new Map(); // code -> room
 let pid = 0;
 
 const COURSE_GRACE_MS = 45000;          // temps max après le 1er arrivé (course)
-const ELIM_COUNT = 50;                   // nb de mots par manche (élimination)
+const ELIM_COUNT = 50;                   // nb de mots par manche (élimination, contenu « mots »)
 const ELIM_DURATION_MS = 18000;          // durée d'une manche
 const ELIM_GAP_MS = 3500;                // pause entre les manches
+const WORD_COURSE_COUNT = 40;            // nb de mots à taper en course (contenu « mots »)
 
 const MODES = ["course", "elimination", "patate", "hard"];
 function normMode(m) { return MODES.includes(m) ? m : "course"; }
 
 // Réglages des modes : valeurs autorisées + valeurs par défaut
 const OPT_VALUES = { lives: [1, 2, 3], elimDur: [12, 18, 25], hardCount: [20, 30, 50] };
-function defaultOpts() { return { lives: 2, elimDur: 18, hardCount: 30 }; }
+// Contenu par défaut pour course / élimination : texte long pour la course, mots pour l'élimination.
+function defaultContentFor(mode) { return mode === "elimination" ? "mots" : "texte"; }
+function defaultOpts(mode) {
+  return { lives: 2, elimDur: 18, hardCount: 30, content: defaultContentFor(mode || "course"), textChoice: "rand" };
+}
+// Choisit l'index du texte à utiliser (un index précis choisi par l'hôte, ou aléatoire).
+function pickTextIndex(room) {
+  const n = WORDS.texts.length;
+  const c = room.opts && room.opts.textChoice;
+  if (Number.isInteger(c) && c >= 0 && c < n) return c;
+  return Math.floor(Math.random() * n);
+}
 
 function code4() {
   const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -225,9 +237,14 @@ function startCourse(room) {
     room.seed = Math.floor(Math.random() * 1e9);
     const count = (room.opts && room.opts.hardCount) || 30;
     broadcast(room, { type: "start", mode: "hard", seed: room.seed, count });
+  } else if (room.opts && room.opts.content === "mots") {
+    // course sur des mots courants
+    room.seed = Math.floor(Math.random() * 1e9);
+    broadcast(room, { type: "start", mode: "course", content: "mots", seed: room.seed, count: WORD_COURSE_COUNT });
   } else {
-    room.textIndex = Math.floor(Math.random() * WORDS.texts.length);
-    broadcast(room, { type: "start", mode: "course", textIndex: room.textIndex });
+    // course sur un texte long (précis ou aléatoire)
+    room.textIndex = pickTextIndex(room);
+    broadcast(room, { type: "start", mode: "course", content: "texte", textIndex: room.textIndex });
   }
 }
 function endCourse(room) {
@@ -261,10 +278,20 @@ function startElimRound(room) {
   room.seed = Math.floor(Math.random() * 1e9);
   const dur = (room.opts && room.opts.elimDur ? room.opts.elimDur : 18) * 1000;
   for (const p of room.players.values()) { p.score = 0; p.progress = 0; p.wpm = 0; }
-  broadcast(room, {
-    type: "start", mode: "elimination",
-    seed: room.seed, count: ELIM_COUNT, duration: dur, round: room.round,
-  });
+  if (room.opts && room.opts.content === "texte") {
+    // manche sur un texte long (précis ou aléatoire)
+    room.textIndex = pickTextIndex(room);
+    broadcast(room, {
+      type: "start", mode: "elimination", content: "texte",
+      textIndex: room.textIndex, duration: dur, round: room.round,
+    });
+  } else {
+    // manche sur des mots courants
+    broadcast(room, {
+      type: "start", mode: "elimination", content: "mots",
+      seed: room.seed, count: ELIM_COUNT, duration: dur, round: room.round,
+    });
+  }
   room.roundTimer = setTimeout(() => evaluateElim(room), dur + 800);
 }
 function evaluateElim(room) {
@@ -406,8 +433,9 @@ wss.on("connection", (ws) => {
         const code = code4();
         const id = ++pid;
         const player = mkPlayer(id, msg.name, ws);
+        const mode = normMode(msg.mode);
         const r = {
-          code, hostId: id, mode: normMode(msg.mode), opts: defaultOpts(),
+          code, hostId: id, mode, opts: defaultOpts(mode),
           state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]),
         };
         rooms.set(code, r);
@@ -438,16 +466,28 @@ wss.on("connection", (ws) => {
         // seul l'hôte peut changer le mode, et seulement dans le salon
         if (!room || !ws.player) return;
         if (room.hostId !== ws.player.id || room.state !== "lobby") return;
-        room.mode = normMode(msg.mode);
+        const newMode = normMode(msg.mode);
+        if (newMode !== room.mode) {
+          room.mode = newMode;
+          // remet le contenu par défaut du nouveau mode (texte pour course, mots pour élim)
+          room.opts.content = defaultContentFor(newMode);
+          room.opts.textChoice = "rand";
+        }
         broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
         break;
       }
       case "setopt": {
-        // l'hôte change un réglage (vies / durée / nombre de mots), dans le salon
+        // l'hôte change un réglage (vies / durée / nb de mots / contenu / texte), dans le salon
         if (!room || !ws.player) return;
         if (room.hostId !== ws.player.id || room.state !== "lobby") return;
-        if (OPT_VALUES[msg.key] && OPT_VALUES[msg.key].includes(msg.value)) {
-          room.opts[msg.key] = msg.value;
+        const { key, value } = msg;
+        let ok = false;
+        if (OPT_VALUES[key] && OPT_VALUES[key].includes(value)) ok = true;
+        else if (key === "content" && (value === "texte" || value === "mots")) ok = true;
+        else if (key === "textChoice" &&
+          (value === "rand" || (Number.isInteger(value) && value >= 0 && value < WORDS.texts.length))) ok = true;
+        if (ok) {
+          room.opts[key] = value;
           broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
         }
         break;
