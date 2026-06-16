@@ -8,7 +8,30 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
-const { TEXTS_COUNT, COMMON_WORDS } = require("./public/words.js");
+const { COMMON_WORDS, HARD_WORDS, TEXTS } = require("./public/words.js");
+
+/* ---------- Mots & textes modifiables (admin) ----------
+   Source de vérité partagée par tous les joueurs.
+   Les listes par défaut viennent de words.js ; toute modification faite
+   via le panneau « admin » est sauvegardée dans words-data.json, donc
+   conservée même après un redémarrage du serveur. */
+const WORDS_FILE = path.join(__dirname, "words-data.json");
+const ADMIN_PASSWORD = "azerty";
+const WORDS = { common: [...COMMON_WORDS], hard: [...HARD_WORDS], texts: [...TEXTS] };
+
+function loadWords() {
+  try {
+    const data = JSON.parse(fs.readFileSync(WORDS_FILE, "utf8"));
+    for (const key of ["common", "hard", "texts"]) {
+      if (Array.isArray(data[key]) && data[key].length) WORDS[key] = data[key];
+    }
+  } catch { /* pas de fichier → on garde les listes par défaut */ }
+}
+function saveWords() {
+  try { fs.writeFileSync(WORDS_FILE, JSON.stringify(WORDS, null, 2)); }
+  catch (e) { console.error("[saveWords]", e); }
+}
+loadWords();
 
 // Port/IP d'écoute :
 // - AlwaysData fournit ALWAYSDATA_HTTPD_PORT / ALWAYSDATA_HTTPD_IP
@@ -29,8 +52,65 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
+function sendJson(res, code, obj) {
+  res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(obj));
+}
+
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split("?")[0]);
+
+  /* ---------- API : listes de mots ---------- */
+  // Le client récupère les listes au chargement.
+  if (urlPath === "/api/words" && req.method === "GET") {
+    return sendJson(res, 200, WORDS);
+  }
+  // L'admin ajoute / supprime un mot ou un texte (protégé par mot de passe).
+  if (urlPath === "/api/admin" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+    req.on("end", () => {
+      let msg; try { msg = JSON.parse(body); } catch { return sendJson(res, 400, { error: "requête invalide" }); }
+      if (msg.password !== ADMIN_PASSWORD) return sendJson(res, 403, { error: "mot de passe incorrect" });
+
+      const listName = msg.list; // "common" | "hard" | "texts"
+      if ((msg.action === "add" || msg.action === "remove") && !WORDS[listName]) {
+        return sendJson(res, 400, { error: "liste inconnue" });
+      }
+
+      let changed = false;
+      if (msg.action === "add") {
+        const value = (msg.value || "").toString().trim();
+        if (value) {
+          if (listName === "texts") {
+            // un texte = une entrée complète (paragraphe)
+            if (!WORDS.texts.includes(value)) { WORDS.texts.push(value); changed = true; }
+          } else {
+            // mots : on accepte plusieurs mots séparés par des espaces
+            for (const w of value.split(/\s+/).filter(Boolean)) {
+              if (!WORDS[listName].includes(w)) { WORDS[listName].push(w); changed = true; }
+            }
+          }
+        }
+      } else if (msg.action === "remove") {
+        const value = (msg.value || "").toString();
+        const filtered = WORDS[listName].filter((w) => w !== value);
+        // garde-fou : on ne vide jamais complètement une liste (sinon le jeu casse)
+        if (filtered.length === 0) {
+          return sendJson(res, 400, { error: "impossible de tout supprimer : garde au moins une entrée" });
+        }
+        changed = filtered.length !== WORDS[listName].length;
+        WORDS[listName] = filtered;
+      }
+      // action "check" (ou sans modif) : on renvoie simplement les listes à jour
+
+      if (changed) saveWords();
+      return sendJson(res, 200, WORDS);
+    });
+    return;
+  }
+
+  /* ---------- Fichiers statiques ---------- */
   if (urlPath === "/") urlPath = "/index.html";
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
 
@@ -115,7 +195,7 @@ function startCourse(room) {
     const count = (room.opts && room.opts.hardCount) || 30;
     broadcast(room, { type: "start", mode: "hard", seed: room.seed, count });
   } else {
-    room.textIndex = Math.floor(Math.random() * TEXTS_COUNT);
+    room.textIndex = Math.floor(Math.random() * WORDS.texts.length);
     broadcast(room, { type: "start", mode: "course", textIndex: room.textIndex });
   }
 }
@@ -190,7 +270,8 @@ function finishElim(room) {
 
 /* ----- PATATE CHAUDE ----- */
 function randWord() {
-  return COMMON_WORDS[Math.floor(Math.random() * COMMON_WORDS.length)];
+  const list = WORDS.common;
+  return list[Math.floor(Math.random() * list.length)];
 }
 function startPatate(room) {
   room.state = "playing";

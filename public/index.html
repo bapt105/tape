@@ -234,8 +234,44 @@
 
   <footer class="foot">
     <span class="foot-logo">TAPE<span>_</span></span>
-    <span class="foot-credit">créé par baptiste jacquet</span>
+    <span class="foot-right">
+      <span class="foot-credit">créé par baptiste jacquet</span>
+      <button class="foot-admin" id="admin-open">admin</button>
+    </span>
   </footer>
+
+  <!-- ====================== ADMIN (mot de passe) ====================== -->
+  <div class="admin-overlay hidden" id="admin-overlay">
+    <div class="admin-modal">
+      <button class="admin-close" id="admin-close" title="Fermer">×</button>
+      <h2 class="admin-h">admin</h2>
+
+      <!-- étape 1 : mot de passe -->
+      <div id="admin-login">
+        <p class="admin-desc">Entre le mot de passe pour gérer les mots et les textes du jeu.</p>
+        <input type="password" id="admin-pass" placeholder="mot de passe" autocomplete="off" />
+        <button class="btn" id="admin-login-btn">entrer</button>
+        <p class="admin-error" id="admin-error"></p>
+      </div>
+
+      <!-- étape 2 : gestion des listes -->
+      <div id="admin-panel" class="hidden">
+        <div class="mode-pick admin-tabs" id="admin-tabs">
+          <button class="opt active" data-list="common">mots courants</button>
+          <button class="opt" data-list="hard">difficile</button>
+          <button class="opt" data-list="texts">textes</button>
+        </div>
+        <p class="admin-hint" id="admin-list-hint"></p>
+        <div class="admin-add">
+          <textarea id="admin-input" rows="1" placeholder="…"></textarea>
+          <button class="btn" id="admin-add-btn">ajouter</button>
+        </div>
+        <div class="admin-count" id="admin-count"></div>
+        <div class="admin-list" id="admin-list"></div>
+        <p class="admin-status" id="admin-status"></p>
+      </div>
+    </div>
+  </div>
 
   <script src="words.js"></script>
   <script src="app.js"></script>

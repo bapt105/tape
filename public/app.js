@@ -580,7 +580,7 @@ function startCourseClient(cfg) {
 /* ----- Patate chaude ----- */
 function startPatateClient() {
   go("race");
-  $("#race-bomb").classList.remove("hidden");
+  $("#race-bomb").classList.add("hidden"); // patate chaude : on ne montre pas le temps restant
   $("#race-mode-label").textContent = "patate chaude";
   $("#race-info").textContent = "préparez-vous…";
   $("#race-progress").textContent = "";
@@ -589,24 +589,13 @@ function startPatateClient() {
   raceEngine.load("…", { finite: false });
   raceEngine.setSpectator(true);
   raceEngine.setBlur(true);
-  $("#race-bomb-fill").style.width = "100%";
   showCountdown(() => { $("#race-info").textContent = "la bombe arrive…"; raceEngine.setBlur(false); });
 }
-function animateBomb(total, remaining) {
-  const fill = $("#race-bomb-fill");
-  const pct = total > 0 ? Math.max(0, Math.min(100, (remaining / total) * 100)) : 0;
-  fill.style.transition = "none";
-  fill.style.width = pct + "%";
-  void fill.offsetWidth; // force le reflow
-  fill.style.transition = "width " + remaining + "ms linear";
-  fill.style.width = "0%";
-}
 function onPotato(msg) {
-  $("#race-bomb").classList.remove("hidden");
+  // patate chaude : la barre de temps (bombe) reste cachée, on n'anime rien
   patateHolder = msg.holderId;
   patateWord = msg.word;
   renderTracks(msg.players.map((p) => ({ ...p, holder: p.id === msg.holderId })));
-  animateBomb(msg.bombTotal, msg.bombRemaining);
   const holderName = (msg.players.find((p) => p.id === msg.holderId) || {}).name || "";
   raceEngine.load(msg.word, { finite: false });
   if (msg.holderId === me.id && !amEliminated) {
@@ -762,7 +751,6 @@ function handleServer(msg) {
       raceEngine.setSpectator(true);
       let info;
       if (msg.exploded) { // patate chaude
-        const f = $("#race-bomb-fill"); f.style.transition = "none"; f.style.width = "0%";
         const mine = msg.explodedId === me.id;
         if (msg.eliminatedId) {
           info = `${escapeText(msg.exploded)} explose et est éliminé · ${msg.remaining} en jeu` + (mine ? " — tu es éliminé !" : "");
@@ -790,5 +778,154 @@ function escapeText(s) {
   return (s || "").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 }
 
+/* ============================================================
+   ADMIN — gestion des mots et des textes
+   ============================================================ */
+
+// Remplace en place le contenu des listes utilisées par le jeu.
+// (COMMON_WORDS / HARD_WORDS / TEXTS viennent de words.js ; on garde la même
+//  référence de tableau, on change juste son contenu.)
+function applyWordData(data) {
+  if (Array.isArray(data.common) && data.common.length) { COMMON_WORDS.length = 0; COMMON_WORDS.push(...data.common); }
+  if (Array.isArray(data.hard)   && data.hard.length)   { HARD_WORDS.length = 0;   HARD_WORDS.push(...data.hard); }
+  if (Array.isArray(data.texts)  && data.texts.length)  { TEXTS.length = 0;        TEXTS.push(...data.texts); }
+}
+
+// Récupère les listes depuis le serveur au chargement de la page.
+async function loadWordData() {
+  try {
+    const res = await fetch("/api/words");
+    if (!res.ok) return;
+    applyWordData(await res.json());
+    refreshCurrentSolo();
+  } catch { /* serveur indisponible (ex : ouvert en fichier) → listes par défaut */ }
+}
+
+// Recharge l'écran solo courant pour que les nouveaux mots soient pris en compte.
+function refreshCurrentSolo() {
+  if (currentScreen === "solo-words") setupWords();
+  else if (currentScreen === "solo-hard") setupHard();
+  else if (currentScreen === "solo-zen") setupZen();
+  else if (currentScreen === "solo-text") setupText();
+}
+
+const adminOverlay = $("#admin-overlay");
+let adminPassword = "";                                  // mémorisé après connexion réussie
+let adminList = "common";                                // liste active dans le panneau
+let adminData = { common: [], hard: [], texts: [] };     // dernières listes connues
+const ADMIN_META = {
+  common: { hint: "Mots du mode « mots courants » (aussi patate chaude et élimination). Tu peux en ajouter plusieurs séparés par des espaces.", ph: "ex : bonjour maison soleil" },
+  hard:   { hint: "Mots du mode « difficile ». Plusieurs mots possibles, séparés par des espaces.", ph: "ex : anticonstitutionnellement" },
+  texts:  { hint: "Textes du mode « texte ». Un texte (paragraphe) complet par entrée.", ph: "Colle ici un texte complet…" },
+};
+
+function openAdmin() {
+  adminOverlay.classList.remove("hidden");
+  $("#admin-login").classList.remove("hidden");
+  $("#admin-panel").classList.add("hidden");
+  $("#admin-error").textContent = "";
+  $("#admin-pass").value = "";
+  setTimeout(() => $("#admin-pass").focus(), 30);
+}
+function closeAdmin() {
+  adminOverlay.classList.add("hidden");
+  refreshCurrentSolo(); // applique d'éventuels changements à l'écran en cours
+}
+
+// Petit utilitaire pour parler au serveur d'admin.
+async function adminRequest(payload) {
+  try {
+    const res = await fetch("/api/admin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+  } catch {
+    return { ok: false, data: { error: "serveur injoignable" } };
+  }
+}
+
+async function adminLogin() {
+  const pass = $("#admin-pass").value;
+  const { ok, data } = await adminRequest({ password: pass, action: "check" });
+  if (!ok) { $("#admin-error").textContent = data.error || "mot de passe incorrect"; return; }
+  adminPassword = pass;
+  adminData = data;
+  applyWordData(data);
+  $("#admin-login").classList.add("hidden");
+  $("#admin-panel").classList.remove("hidden");
+  renderAdminList();
+}
+
+function renderAdminList() {
+  const meta = ADMIN_META[adminList];
+  $("#admin-list-hint").textContent = meta.hint;
+  $("#admin-input").placeholder = meta.ph;
+  const items = adminData[adminList] || [];
+  $("#admin-count").textContent = items.length + (adminList === "texts" ? " texte(s)" : " mot(s)");
+  const wrap = $("#admin-list");
+  wrap.innerHTML = "";
+  items.forEach((val) => {
+    const row = document.createElement("div");
+    row.className = "admin-item" + (adminList === "texts" ? " is-text" : "");
+    const span = document.createElement("span");
+    span.className = "admin-item-val";
+    span.textContent = val;
+    const del = document.createElement("button");
+    del.className = "admin-del"; del.textContent = "×"; del.title = "supprimer";
+    del.addEventListener("click", () => adminRemove(val));
+    row.appendChild(span); row.appendChild(del);
+    wrap.appendChild(row);
+  });
+}
+
+function adminStatus(text, isErr) {
+  const el = $("#admin-status");
+  el.textContent = text;
+  el.classList.toggle("err", !!isErr);
+  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, 2000);
+}
+
+async function adminAdd() {
+  const value = $("#admin-input").value.trim();
+  if (!value) return;
+  const { ok, data } = await adminRequest({ password: adminPassword, action: "add", list: adminList, value });
+  if (!ok) { adminStatus(data.error || "erreur", true); return; }
+  adminData = data; applyWordData(data);
+  $("#admin-input").value = "";
+  renderAdminList();
+  adminStatus("ajouté ✓");
+}
+async function adminRemove(value) {
+  const { ok, data } = await adminRequest({ password: adminPassword, action: "remove", list: adminList, value });
+  if (!ok) { adminStatus(data.error || "erreur", true); return; }
+  adminData = data; applyWordData(data);
+  renderAdminList();
+  adminStatus("supprimé ✓");
+}
+
+$("#admin-open").addEventListener("click", openAdmin);
+$("#admin-close").addEventListener("click", closeAdmin);
+adminOverlay.addEventListener("click", (e) => { if (e.target === adminOverlay) closeAdmin(); });
+$("#admin-login-btn").addEventListener("click", adminLogin);
+$("#admin-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") adminLogin(); });
+$("#admin-add-btn").addEventListener("click", adminAdd);
+$("#admin-input").addEventListener("keydown", (e) => {
+  // Entrée = ajouter (sauf pour les textes, où Entrée sert à aller à la ligne)
+  if (e.key === "Enter" && !e.shiftKey && adminList !== "texts") { e.preventDefault(); adminAdd(); }
+});
+$$("#admin-tabs .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#admin-tabs .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    adminList = b.dataset.list;
+    $("#admin-input").value = "";
+    renderAdminList();
+  })
+);
+
 /* ---------- démarrage ---------- */
+loadWordData();
 go("home");
