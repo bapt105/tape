@@ -136,7 +136,13 @@ function createEngine(typingEl) {
     if (k === expected) correctKeys++;
     if ((input[cur] || "").length < words[cur].length + 8) {
       input[cur] = (input[cur] || "") + k;
-      paintWord(cur); updateCaret();
+      paintWord(cur);
+      // petit saut de la lettre quand elle est correcte
+      if (k === expected) {
+        const span = wordEls[cur].children[input[cur].length - 1];
+        if (span) span.classList.add("pop");
+      }
+      updateCaret();
     }
     checkFinish();
     cb.progress(stats());
@@ -229,7 +235,6 @@ function setupWords() {
   const enough = Math.max(60, Math.round(wordsDuration * 4));
   wordsEngine.load(generateWords(enough), { finite: false });
   $("#words-timer").textContent = wordsDuration;
-  $("#words-timer").classList.remove("low");
   $("#words-wpm").textContent = "0 mpm";
   clearInterval(wordsTick); clearTimeout(wordsTimer);
 }
@@ -240,7 +245,6 @@ wordsEngine.on({
       const s = wordsEngine.stats();
       remaining = Math.max(0, wordsDuration - Math.floor(s.elapsedMs / 1000));
       $("#words-timer").textContent = remaining;
-      $("#words-timer").classList.toggle("low", remaining <= 5);
       $("#words-wpm").textContent = s.wpm + " mpm";
     }, 100);
     wordsTimer = setTimeout(() => {
@@ -346,7 +350,6 @@ function setupHard() {
   const enough = Math.max(40, Math.round(hardDuration * 2.5));
   hardEngine.load(generateHardWords(enough), { finite: false });
   $("#hard-timer").textContent = hardDuration;
-  $("#hard-timer").classList.remove("low");
   $("#hard-wpm").textContent = "0 mpm";
   clearInterval(hardTick); clearTimeout(hardTimer);
 }
@@ -354,9 +357,7 @@ hardEngine.on({
   start() {
     hardTick = setInterval(() => {
       const s = hardEngine.stats();
-      const remaining = Math.max(0, hardDuration - Math.floor(s.elapsedMs / 1000));
-      $("#hard-timer").textContent = remaining;
-      $("#hard-timer").classList.toggle("low", remaining <= 5);
+      $("#hard-timer").textContent = Math.max(0, hardDuration - Math.floor(s.elapsedMs / 1000));
       $("#hard-wpm").textContent = s.wpm + " mpm";
     }, 100);
     hardTimer = setTimeout(() => { clearInterval(hardTick); hardEngine.forceFinish(); }, hardDuration * 1000);
