@@ -190,6 +190,35 @@ function createEngine(typingEl) {
 /* fonction mpm/format */
 function fmt(n) { return Math.round(n); }
 
+/* ---------- Petits utilitaires d'animation ---------- */
+// Rejoue une animation CSS en retirant puis remettant la classe.
+function restartAnim(el, cls) {
+  if (!el) return;
+  el.classList.remove(cls);
+  void el.offsetWidth; // force le reflow pour que l'animation puisse rejouer
+  el.classList.add(cls);
+}
+// Fait défiler un nombre de 0 jusqu'à sa valeur (effet « compteur »).
+function countUp(el, target, dur = 700) {
+  if (!el) return;
+  target = Math.round(target) || 0;
+  if (target <= 0) { el.textContent = "0"; return; }
+  const start = performance.now();
+  (function step(t) {
+    const p = Math.min(1, (t - start) / dur);
+    const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+    el.textContent = Math.round(target * eased);
+    if (p < 1) requestAnimationFrame(step);
+    else el.textContent = target;
+  })(start);
+}
+// Déclenche l'effet d'explosion (flash + onde + secousse de l'écran).
+function triggerExplosion() {
+  restartAnim($("#boom-flash"), "show");
+  restartAnim($("#boom-ring"), "show");
+  restartAnim($("#screen-race"), "shake");
+}
+
 /* ============================================================
    SOLO — MOTS COURANTS
    ============================================================ */
@@ -200,6 +229,7 @@ function setupWords() {
   const enough = Math.max(60, Math.round(wordsDuration * 4));
   wordsEngine.load(generateWords(enough), { finite: false });
   $("#words-timer").textContent = wordsDuration;
+  $("#words-timer").classList.remove("low");
   $("#words-wpm").textContent = "0 mpm";
   clearInterval(wordsTick); clearTimeout(wordsTimer);
 }
@@ -210,6 +240,7 @@ wordsEngine.on({
       const s = wordsEngine.stats();
       remaining = Math.max(0, wordsDuration - Math.floor(s.elapsedMs / 1000));
       $("#words-timer").textContent = remaining;
+      $("#words-timer").classList.toggle("low", remaining <= 5);
       $("#words-wpm").textContent = s.wpm + " mpm";
     }, 100);
     wordsTimer = setTimeout(() => {
@@ -315,6 +346,7 @@ function setupHard() {
   const enough = Math.max(40, Math.round(hardDuration * 2.5));
   hardEngine.load(generateHardWords(enough), { finite: false });
   $("#hard-timer").textContent = hardDuration;
+  $("#hard-timer").classList.remove("low");
   $("#hard-wpm").textContent = "0 mpm";
   clearInterval(hardTick); clearTimeout(hardTimer);
 }
@@ -322,7 +354,9 @@ hardEngine.on({
   start() {
     hardTick = setInterval(() => {
       const s = hardEngine.stats();
-      $("#hard-timer").textContent = Math.max(0, hardDuration - Math.floor(s.elapsedMs / 1000));
+      const remaining = Math.max(0, hardDuration - Math.floor(s.elapsedMs / 1000));
+      $("#hard-timer").textContent = remaining;
+      $("#hard-timer").classList.toggle("low", remaining <= 5);
       $("#hard-wpm").textContent = s.wpm + " mpm";
     }, 100);
     hardTimer = setTimeout(() => { clearInterval(hardTick); hardEngine.forceFinish(); }, hardDuration * 1000);
@@ -356,9 +390,9 @@ let lastSoloMode = "solo-words";
 function showResult(s, label) {
   lastSoloMode = label === "texte" ? "solo-text" : label === "zen" ? "solo-zen"
     : label === "difficile" ? "solo-hard" : "solo-words";
-  $("#res-wpm").textContent = fmt(s.wpm);
-  $("#res-acc").textContent = fmt(s.accuracy);
-  $("#res-chars").textContent = s.correctChars;
+  countUp($("#res-wpm"), s.wpm);
+  countUp($("#res-acc"), s.accuracy);
+  countUp($("#res-chars"), s.correctChars);
   $("#res-time").textContent = Math.round(s.elapsedMs / 1000);
   $("#res-mode").textContent = label;
   go("result");
@@ -370,6 +404,10 @@ $("#res-again").addEventListener("click", () => go(lastSoloMode));
    ============================================================ */
 const raceEngine = createEngine($("#race-typing"));
 $("#race-typing").classList.add("text-mode");
+// retire la classe « shake » une fois la secousse finie (sinon elle rejoue à la prochaine partie)
+$("#screen-race").addEventListener("animationend", (e) => {
+  if (e.animationName === "shake") e.currentTarget.classList.remove("shake");
+});
 
 let ws = null, wsReady = false;
 let me = { id: null, name: "" };
@@ -533,6 +571,7 @@ function renderTracks(players) {
   players.forEach((p) => {
     const t = document.createElement("div");
     t.className = "track" + (p.finished ? " done" : "") + (p.eliminated ? " eliminated" : "") + (p.holder ? " holder" : "");
+    t.dataset.id = p.id; // pour retrouver le joueur (ex. flash à l'explosion)
     const isMe = p.id === me.id;
     const right = p.eliminated ? "éliminé"
       : p.holder ? "tient la bombe"
@@ -554,11 +593,15 @@ function showCountdown(then) {
   const el = $("#race-countdown");
   el.classList.add("show");
   let n = 3;
-  el.textContent = n;
+  // chaque chiffre est un nouveau <span> → l'animation « pop » rejoue toute seule
+  const paint = (txt) => { el.innerHTML = `<span class="count-num">${txt}</span>`; };
+  paint(n);
   const iv = setInterval(() => {
     n--;
-    if (n <= 0) { el.textContent = "go"; clearInterval(iv); setTimeout(() => { el.classList.remove("show"); then(); }, 500); }
-    else el.textContent = n;
+    if (n <= 0) {
+      paint("go"); clearInterval(iv);
+      setTimeout(() => { el.classList.remove("show"); el.innerHTML = ""; then(); }, 500);
+    } else paint(n);
   }, 800);
 }
 
@@ -751,6 +794,7 @@ function handleServer(msg) {
       raceEngine.setSpectator(true);
       let info;
       if (msg.exploded) { // patate chaude
+        triggerExplosion(); // 💥 flash + onde + secousse
         const mine = msg.explodedId === me.id;
         if (msg.eliminatedId) {
           info = `${escapeText(msg.exploded)} explose et est éliminé · ${msg.remaining} en jeu` + (mine ? " — tu es éliminé !" : "");
@@ -761,6 +805,10 @@ function handleServer(msg) {
         info = `${escapeText(msg.eliminated)} éliminé · ${msg.remaining} restant(s)` + (msg.eliminatedId === me.id ? " — tu es éliminé !" : "");
       }
       renderTracks(msg.standings.map((s) => ({ ...s, progress: 0 })));
+      // fait clignoter en rouge la piste du joueur qui a explosé
+      if (msg.exploded && msg.explodedId != null) {
+        restartAnim($(`#race-tracks .track[data-id="${msg.explodedId}"]`), "boom-track");
+      }
       $("#race-info").textContent = info;
       break;
     }

@@ -345,6 +345,85 @@ kbd {
 .admin-status { font-size: .8rem; color: var(--good); margin-top: 10px; min-height: 1.1em; }
 .admin-status.err { color: var(--error); }
 
+/* ============================================================
+   ANIMATIONS (sobres, dans l'esprit minimaliste)
+   ============================================================ */
+
+/* --- Explosion de la patate chaude --- */
+.boom-flash {
+  position: fixed; inset: 0; z-index: 60; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(202,71,84,0) 35%, rgba(202,71,84,.42) 100%);
+}
+.boom-flash.show { animation: boomFlash .5s ease forwards; }
+@keyframes boomFlash { 0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; } }
+
+.boom-ring {
+  position: fixed; left: 50%; top: 45%; z-index: 61; pointer-events: none;
+  width: 16px; height: 16px; border-radius: 50%; border: 3px solid var(--error);
+  transform: translate(-50%,-50%) scale(0); opacity: 0;
+}
+.boom-ring.show { animation: boomRing .55s cubic-bezier(.2,.7,.3,1) forwards; }
+@keyframes boomRing {
+  0%   { transform: translate(-50%,-50%) scale(0);  opacity: .85; }
+  100% { transform: translate(-50%,-50%) scale(28); opacity: 0; }
+}
+
+.shake { animation: shake .45s cubic-bezier(.36,.07,.19,.97); }
+@keyframes shake {
+  10%,90% { transform: translateX(-2px); }
+  20%,80% { transform: translateX(3px); }
+  30%,50%,70% { transform: translateX(-6px); }
+  40%,60% { transform: translateX(6px); }
+}
+.track.boom-track .track-bar { animation: boomTrack .55s ease; }
+@keyframes boomTrack {
+  0%   { box-shadow: 0 0 0 0 rgba(202,71,84,.6); border-color: var(--error); }
+  100% { box-shadow: 0 0 0 10px rgba(202,71,84,0); }
+}
+
+/* --- Compte à rebours qui « pop » à chaque chiffre --- */
+.count-num { display: inline-block; animation: countPop .42s ease; }
+@keyframes countPop {
+  0%   { transform: scale(.5);  opacity: 0; }
+  40%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+/* --- Cartes d'accueil : entrée en cascade --- */
+.menu .card { animation: cardIn .4s ease backwards; }
+.menu .card:nth-child(1) { animation-delay: .04s; }
+.menu .card:nth-child(2) { animation-delay: .09s; }
+.menu .card:nth-child(3) { animation-delay: .14s; }
+.menu .card:nth-child(4) { animation-delay: .19s; }
+.menu .card:nth-child(5) { animation-delay: .24s; }
+@keyframes cardIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* --- Résultat solo : les grands chiffres entrent en douceur --- */
+.result-main .big { animation: bigIn .45s ease backwards; }
+.result-main .big:nth-child(2) { animation-delay: .08s; }
+@keyframes bigIn { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* --- Chrono qui pulse rouge dans les 5 dernières secondes --- */
+.stats-live > span:first-child { display: inline-block; }
+#words-timer.low, #hard-timer.low { color: var(--error); animation: lowPulse .9s ease-in-out infinite; }
+@keyframes lowPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.16); } }
+
+/* --- Petits retours tactiles --- */
+.btn:active { transform: scale(.98); }
+.opt:active { transform: scale(.96); }
+.foot-admin:active { transform: scale(.96); }
+#theme-toggle { transition: color .15s, transform .35s ease; }
+#theme-toggle:hover { transform: rotate(35deg); }
+
+/* --- Respect des préférences d'accessibilité --- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .boom-flash, .boom-ring { display: none !important; }
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 620px) {
   .multi-split { grid-template-columns: 1fr; }
