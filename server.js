@@ -58,6 +58,10 @@ const ELIM_GAP_MS = 3500;                // pause entre les manches
 const MODES = ["course", "elimination", "patate", "hard"];
 function normMode(m) { return MODES.includes(m) ? m : "course"; }
 
+// Réglages des modes : valeurs autorisées + valeurs par défaut
+const OPT_VALUES = { lives: [1, 2, 3], elimDur: [12, 18, 25], hardCount: [20, 30, 50] };
+function defaultOpts() { return { lives: 2, elimDur: 18, hardCount: 30 }; }
+
 function code4() {
   const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let c;
@@ -82,7 +86,7 @@ function playerList(room) {
 function raceState(room) {
   return [...room.players.values()].map((p) => ({
     id: p.id, name: p.name, progress: p.progress, wpm: p.wpm,
-    finished: p.finished, eliminated: p.eliminated,
+    finished: p.finished, eliminated: p.eliminated, lives: p.lives,
   }));
 }
 
@@ -108,7 +112,8 @@ function startCourse(room) {
   }
   if (room.mode === "hard") {
     room.seed = Math.floor(Math.random() * 1e9);
-    broadcast(room, { type: "start", mode: "hard", seed: room.seed, count: 30 });
+    const count = (room.opts && room.opts.hardCount) || 30;
+    broadcast(room, { type: "start", mode: "hard", seed: room.seed, count });
   } else {
     room.textIndex = Math.floor(Math.random() * TEXTS_COUNT);
     broadcast(room, { type: "start", mode: "course", textIndex: room.textIndex });
@@ -143,12 +148,13 @@ function startElimRound(room) {
   room.state = "playing";
   room.round = (room.round || 0) + 1;
   room.seed = Math.floor(Math.random() * 1e9);
+  const dur = (room.opts && room.opts.elimDur ? room.opts.elimDur : 18) * 1000;
   for (const p of room.players.values()) { p.score = 0; p.progress = 0; p.wpm = 0; }
   broadcast(room, {
     type: "start", mode: "elimination",
-    seed: room.seed, count: ELIM_COUNT, duration: ELIM_DURATION_MS, round: room.round,
+    seed: room.seed, count: ELIM_COUNT, duration: dur, round: room.round,
   });
-  room.roundTimer = setTimeout(() => evaluateElim(room), ELIM_DURATION_MS + 800);
+  room.roundTimer = setTimeout(() => evaluateElim(room), dur + 800);
 }
 function evaluateElim(room) {
   if (room.state !== "playing") return;
@@ -189,7 +195,9 @@ function randWord() {
 function startPatate(room) {
   room.state = "playing";
   room.elimOrder = [];
-  broadcast(room, { type: "start", mode: "patate" });
+  const lives = (room.opts && room.opts.lives) || 2;
+  for (const p of room.players.values()) { p.lives = lives; p.eliminated = false; }
+  broadcast(room, { type: "start", mode: "patate", lives });
   // laisse le temps au 3-2-1 côté client, puis lance la première bombe
   setTimeout(() => { if (rooms.has(room.code)) beginPatateRound(room); }, 3200);
 }
@@ -208,6 +216,7 @@ function beginPatateRound(room) {
   sendPotato(room);
 }
 function sendPotato(room) {
+  if (!room.turnIds) return; // sécurité : pas de manche en cours
   broadcast(room, {
     type: "potato",
     holderId: room.turnIds[room.holderIdx],
@@ -233,14 +242,18 @@ function explodePatate(room) {
   room.state = "roundend"; // stoppe les « pass » jusqu'à la manche suivante
   const holder = room.players.get(room.turnIds[room.holderIdx]);
   if (!holder) { beginPatateRound(room); return; }
-  holder.eliminated = true;
-  room.elimOrder.push(holder.name);
+  holder.lives = (holder.lives || 1) - 1;
+  const out = holder.lives <= 0;
+  if (out) { holder.eliminated = true; room.elimOrder.push(holder.name); }
   const remaining = [...room.players.values()].filter((p) => !p.eliminated).length;
   broadcast(room, {
-    type: "roundEnd", eliminated: holder.name, eliminatedId: holder.id,
+    type: "roundEnd",
+    exploded: holder.name, explodedId: holder.id, livesLeft: Math.max(0, holder.lives),
+    eliminated: out ? holder.name : null,
+    eliminatedId: out ? holder.id : null,
     remaining, standings: raceState(room),
   });
-  if (remaining <= 1) setTimeout(() => finishElim(room), 1500);
+  if (remaining <= 1) setTimeout(() => finishElim(room), 1800);
   else setTimeout(() => { if (rooms.has(room.code)) beginPatateRound(room); }, ELIM_GAP_MS);
 }
 
@@ -282,12 +295,12 @@ wss.on("connection", (ws) => {
         const id = ++pid;
         const player = mkPlayer(id, msg.name, ws);
         const r = {
-          code, hostId: id, mode: normMode(msg.mode),
+          code, hostId: id, mode: normMode(msg.mode), opts: defaultOpts(),
           state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]),
         };
         rooms.set(code, r);
         ws.player = player; ws.roomCode = code;
-        send(ws, { type: "joined", code, you: id, mode: r.mode, isHost: true, players: playerList(r) });
+        send(ws, { type: "joined", code, you: id, mode: r.mode, opts: r.opts, isHost: true, players: playerList(r) });
         break;
       }
       case "join": {
@@ -299,14 +312,14 @@ wss.on("connection", (ws) => {
         const player = mkPlayer(id, msg.name, ws);
         r.players.set(id, player);
         ws.player = player; ws.roomCode = r.code;
-        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, isHost: false, players: playerList(r) });
-        broadcast(r, { type: "players", players: playerList(r), mode: r.mode });
+        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, opts: r.opts, isHost: false, players: playerList(r) });
+        broadcast(r, { type: "players", players: playerList(r), mode: r.mode, opts: r.opts });
         break;
       }
       case "ready": {
         if (!room || !ws.player || room.state !== "lobby") return;
         ws.player.ready = !!msg.ready;
-        broadcast(room, { type: "players", players: playerList(room), mode: room.mode });
+        broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
         break;
       }
       case "setmode": {
@@ -314,7 +327,17 @@ wss.on("connection", (ws) => {
         if (!room || !ws.player) return;
         if (room.hostId !== ws.player.id || room.state !== "lobby") return;
         room.mode = normMode(msg.mode);
-        broadcast(room, { type: "players", players: playerList(room), mode: room.mode });
+        broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
+        break;
+      }
+      case "setopt": {
+        // l'hôte change un réglage (vies / durée / nombre de mots), dans le salon
+        if (!room || !ws.player) return;
+        if (room.hostId !== ws.player.id || room.state !== "lobby") return;
+        if (OPT_VALUES[msg.key] && OPT_VALUES[msg.key].includes(msg.value)) {
+          room.opts[msg.key] = msg.value;
+          broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
+        }
         break;
       }
       case "start": {
@@ -357,7 +380,7 @@ wss.on("connection", (ws) => {
       case "rematch": {
         if (!room) return;
         resetRoom(room);
-        broadcast(room, { type: "lobby", mode: room.mode, players: playerList(room) });
+        broadcast(room, { type: "lobby", mode: room.mode, opts: room.opts, players: playerList(room) });
         break;
       }
       case "leave": {
@@ -399,7 +422,7 @@ function leave(ws) {
   if (wasHost) room.hostId = [...room.players.keys()][0];
 
   if (room.state === "lobby") {
-    broadcast(room, { type: "players", players: playerList(room), mode: room.mode });
+    broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
   } else if (room.state === "playing") {
     if (room.mode === "course" || room.mode === "hard") {
       const all = [...room.players.values()];
@@ -408,8 +431,11 @@ function leave(ws) {
     } else if (room.mode === "patate") {
       const active = [...room.players.values()].filter((p) => !p.eliminated);
       if (active.length <= 1) { if (room.bombTimer) clearTimeout(room.bombTimer); finishElim(room); }
-      else if (room.turnIds && room.turnIds[room.holderIdx] === leftId) passPotato(room); // le porteur est parti
-      else sendPotato(room); // rafraîchit la liste
+      else if (room.turnIds) { // la manche est lancée (turnIds défini)
+        if (room.turnIds[room.holderIdx] === leftId) passPotato(room); // le porteur est parti
+        else sendPotato(room); // rafraîchit la liste
+      }
+      // sinon : on est avant la 1re bombe (turnIds pas encore défini) → rien à faire
     } else {
       // élimination : si un seul joueur actif reste, on termine
       const active = [...room.players.values()].filter((p) => !p.eliminated);
@@ -418,6 +444,11 @@ function leave(ws) {
     }
   }
 }
+
+// Filet de sécurité : on logue les erreurs imprévues sans tuer le serveur,
+// pour qu'un bug dans un salon ne déconnecte pas tout le monde.
+process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
+process.on("unhandledRejection", (err) => console.error("[unhandledRejection]", err));
 
 server.listen(PORT, HOST, () => {
   const shown = HOST === "0.0.0.0" ? "localhost" : HOST;

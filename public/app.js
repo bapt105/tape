@@ -373,7 +373,14 @@ $("#race-typing").classList.add("text-mode");
 
 let ws = null, wsReady = false;
 let me = { id: null, name: "" };
-let room = { code: null, mode: "course", isHost: false, players: [] };
+let room = { code: null, mode: "course", isHost: false, players: [], opts: { lives: 2, elimDur: 18, hardCount: 30 } };
+
+// Réglage proposé selon le mode (rien pour la course)
+const MODE_OPTS = {
+  patate: { key: "lives", label: "vies", values: [1, 2, 3] },
+  elimination: { key: "elimDur", label: "durée", values: [12, 18, 25], suffix: "s" },
+  hard: { key: "hardCount", label: "mots", values: [20, 30, 50] },
+};
 let mpModePick = "course";
 let raceTick = null, lastSent = 0, roundLocalTimer = null, sentFinished = false, amEliminated = false;
 let patateHolder = null, patatePassed = false, patateWord = "";
@@ -448,6 +455,25 @@ $("#mp-join").addEventListener("click", () => {
 $("#mp-code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#mp-join").click(); });
 
 /* ----- Salon ----- */
+function renderLobbyOpts() {
+  const meta = MODE_OPTS[room.mode];
+  const row = $("#lobby-opts-row");
+  if (!meta) { row.style.display = "none"; return; }
+  row.style.display = "";
+  $("#lobby-opts-label").textContent = meta.label;
+  const cur = (room.opts && room.opts[meta.key] != null) ? room.opts[meta.key] : meta.values[0];
+  const pick = $("#lobby-opts-pick");
+  pick.innerHTML = "";
+  meta.values.forEach((v) => {
+    const b = document.createElement("button");
+    b.className = "opt" + (v === cur ? " active" : "");
+    b.textContent = v + (meta.suffix || "");
+    b.disabled = !room.isHost;
+    b.addEventListener("click", () => { if (room.isHost) sendWs({ type: "setopt", key: meta.key, value: v }); });
+    pick.appendChild(b);
+  });
+}
+
 function renderLobby() {
   $("#lobby-code").textContent = room.code;
   // sélecteur de mode : bouton actif = mode courant ; cliquable seulement par l'hôte
@@ -456,6 +482,7 @@ function renderLobby() {
     b.disabled = !room.isHost;
   });
   $("#lobby-mode-note").textContent = room.isHost ? "" : "choisi par l'hôte";
+  renderLobbyOpts();
   const ul = $("#lobby-players");
   ul.innerHTML = "";
   room.players.forEach((p) => {
@@ -509,7 +536,7 @@ function renderTracks(players) {
     const isMe = p.id === me.id;
     const right = p.eliminated ? "éliminé"
       : p.holder ? "tient la bombe"
-      : room.mode === "patate" ? ""
+      : room.mode === "patate" ? `<span class="hearts">${"♥".repeat(p.lives || 0)}</span>`
       : (p.wpm || 0) + " mpm";
     t.innerHTML = `
       <div class="track-bar">
@@ -697,17 +724,19 @@ function handleServer(msg) {
   switch (msg.type) {
     case "joined":
       me.id = msg.you; me.name = getName();
-      room = { code: msg.code, mode: msg.mode, isHost: msg.isHost, players: msg.players };
+      room = { code: msg.code, mode: msg.mode, isHost: msg.isHost, players: msg.players, opts: msg.opts || room.opts };
       amEliminated = false;
       renderLobby(); go("lobby");
       break;
     case "players":
       if (msg.mode) room.mode = msg.mode;
+      if (msg.opts) room.opts = msg.opts;
       room.players = msg.players;
       if (currentScreen === "lobby") renderLobby();
       break;
     case "lobby": // après une revanche
       room.mode = msg.mode; room.players = msg.players;
+      if (msg.opts) room.opts = msg.opts;
       room.isHost = !!(room.players.find((p) => p.id === me.id)?.host);
       amEliminated = false;
       renderLobby(); go("lobby");
@@ -731,10 +760,20 @@ function handleServer(msg) {
       if (msg.eliminatedId === me.id) amEliminated = true;
       clearTimeout(roundLocalTimer); clearInterval(raceTick);
       raceEngine.setSpectator(true);
-      if (room.mode === "patate") { const f = $("#race-bomb-fill"); f.style.transition = "none"; f.style.width = "0%"; }
+      let info;
+      if (msg.exploded) { // patate chaude
+        const f = $("#race-bomb-fill"); f.style.transition = "none"; f.style.width = "0%";
+        const mine = msg.explodedId === me.id;
+        if (msg.eliminatedId) {
+          info = `${escapeText(msg.exploded)} explose et est éliminé · ${msg.remaining} en jeu` + (mine ? " — tu es éliminé !" : "");
+        } else {
+          info = `${escapeText(msg.exploded)} explose ! ${msg.livesLeft} vie(s) · ${msg.remaining} en jeu` + (mine ? " — tu perds une vie !" : "");
+        }
+      } else { // élimination
+        info = `${escapeText(msg.eliminated)} éliminé · ${msg.remaining} restant(s)` + (msg.eliminatedId === me.id ? " — tu es éliminé !" : "");
+      }
       renderTracks(msg.standings.map((s) => ({ ...s, progress: 0 })));
-      const suffix = msg.eliminatedId === me.id ? " — tu es éliminé !" : "";
-      $("#race-info").textContent = `${escapeText(msg.eliminated)} éliminé · ${msg.remaining} restant(s)${suffix}`;
+      $("#race-info").textContent = info;
       break;
     }
     case "result":

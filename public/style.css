@@ -245,6 +245,7 @@ kbd {
 .bomb-fill {
   height: 100%; width: 100%; background: var(--error); border-radius: 5px;
 }
+.hearts { color: var(--error); letter-spacing: 2px; }
 
 .countdown {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
