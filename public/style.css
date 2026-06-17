@@ -154,6 +154,8 @@ kbd {
 .typing.spectator { pointer-events: none; }
 .typing.spectator .words { filter: blur(3px); opacity: .45; }
 .typing.spectator.blur::after { content: ""; }
+/* patate chaude : cadre blanc quand c'est à toi de jouer */
+.typing.my-turn { box-shadow: 0 0 0 2px #fff, 0 0 14px rgba(255, 255, 255, .35); }
 @keyframes blink { 50% { opacity: 0; } }
 
 .hint { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 20px; }

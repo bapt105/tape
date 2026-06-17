@@ -46,7 +46,7 @@ function createEngine(typingEl) {
   let started = false, finished = false, startTime = 0;
   let keystrokes = 0, correctKeys = 0, finite = true, spectator = false;
   let wordEls = [], caretEl = null;
-  let cb = { start() {}, progress() {}, finish() {} };
+  let cb = { start() {}, progress() {}, finish() {}, error() {} };
 
   function load(targetStr, opts = {}) {
     words = targetStr.trim().split(/\s+/);
@@ -134,6 +134,7 @@ function createEngine(typingEl) {
     const expected = words[cur][(input[cur] || "").length];
     keystrokes++;
     if (k === expected) correctKeys++;
+    else cb.error();
     if ((input[cur] || "").length < words[cur].length + 8) {
       input[cur] = (input[cur] || "") + k;
       paintWord(cur);
@@ -433,12 +434,12 @@ function lobbyOptionGroups() {
 }
 let mpModePick = "course";
 let raceTick = null, lastSent = 0, roundLocalTimer = null, sentFinished = false, amEliminated = false;
-let patateHolder = null, patatePassed = false, patateWord = "";
+let patateHolder = null, patatePassed = false, patateWord = "", patateErrored = false;
 
 const MODE_DESC = {
   course: "Tout le monde tape le même texte. Le premier à finir gagne. Barres de progression en direct.",
   elimination: "Manches de 18s. À chaque manche, le joueur le plus lent est éliminé. Le dernier survivant gagne.",
-  patate: "Une bombe passe de joueur en joueur : tape ton mot pour la refiler. Celui qui la tient quand elle explose est éliminé.",
+  patate: "Une bombe passe de joueur en joueur : tape les 2 mots pour la refiler. Une faute la fait exploser 1s plus tôt. Celui qui la tient quand elle explose est éliminé.",
   hard: "Comme la course, mais avec des mots difficiles et pleins d'accents. Le premier à finir gagne.",
 };
 
@@ -676,7 +677,8 @@ function startPatateClient() {
   $("#race-info").textContent = "préparez-vous…";
   $("#race-progress").textContent = "";
   $("#race-wpm").textContent = "";
-  patateHolder = null; patatePassed = false; patateWord = "";
+  patateHolder = null; patatePassed = false; patateWord = ""; patateErrored = false;
+  $("#race-typing").classList.remove("my-turn");
   raceEngine.load("…", { finite: false });
   raceEngine.setSpectator(true);
   raceEngine.setBlur(true);
@@ -691,12 +693,15 @@ function onPotato(msg) {
   raceEngine.load(msg.word, { finite: false });
   if (msg.holderId === me.id && !amEliminated) {
     patatePassed = false;
-    $("#race-info").textContent = "à toi ! tape le mot";
+    patateErrored = false; // nouvelle prise de patate → la pénalité d'erreur est réarmée
+    $("#race-info").textContent = "à toi ! tape les mots";
+    $("#race-typing").classList.add("my-turn"); // cadre blanc : c'est ton tour
     raceEngine.setSpectator(false);
     raceEngine.setBlur(false);
     raceEngine.focus();
   } else {
     $("#race-info").textContent = "au tour de " + holderName;
+    $("#race-typing").classList.remove("my-turn");
     raceEngine.setSpectator(true);
     raceEngine.setBlur(false);
   }
@@ -736,12 +741,21 @@ function startElimClient(msg) {
 
 raceEngine.on({
   start() {},
+  error() {
+    // patate chaude : une faute rapproche l'explosion d'1 s, mais une seule fois par tour
+    if (room.mode !== "patate") return;
+    if (patateHolder === me.id && !patatePassed && !patateErrored && !amEliminated) {
+      patateErrored = true;
+      sendWs({ type: "typo" });
+    }
+  },
   progress(s) {
     if (room.mode === "patate") {
-      // refile la patate dès que le mot est tapé entièrement et correctement
+      // refile la patate dès que les mots sont tapés entièrement et correctement
       if (patateHolder === me.id && !patatePassed && !amEliminated && patateWord && s.correctChars >= patateWord.length) {
         patatePassed = true;
         raceEngine.setSpectator(true);
+        $("#race-typing").classList.remove("my-turn");
         $("#race-info").textContent = "passé !";
         sendWs({ type: "pass" });
       }
@@ -843,6 +857,7 @@ function handleServer(msg) {
       if (msg.eliminatedId === me.id) amEliminated = true;
       clearTimeout(roundLocalTimer); clearInterval(raceTick);
       raceEngine.setSpectator(true);
+      $("#race-typing").classList.remove("my-turn");
       let info;
       if (msg.exploded) { // patate chaude
         triggerExplosion(); // 💥 flash + onde + secousse

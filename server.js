@@ -166,7 +166,7 @@ const ELIM_COUNT = 50;                   // nb de mots par manche (élimination,
 const ELIM_DURATION_MS = 18000;          // durée d'une manche
 const ELIM_GAP_MS = 3500;                // pause entre les manches
 const WORD_COURSE_COUNT = 40;            // nb de mots à taper en course (contenu « mots »)
-const PATATE_WORD_COUNT = 3;             // nb de mots à taper pour refiler la patate
+const PATATE_WORD_COUNT = 2;             // nb de mots à taper pour refiler la patate
 
 const MODES = ["course", "elimination", "patate", "hard"];
 function normMode(m) { return MODES.includes(m) ? m : "course"; }
@@ -358,7 +358,7 @@ function beginPatateRound(room) {
   room.state = "playing";
   room.turnIds = active.map((p) => p.id);
   room.holderIdx = Math.floor(Math.random() * room.turnIds.length);
-  room.bombTotal = 6000 + Math.floor(Math.random() * 8000); // 6 à 14 s
+  room.bombTotal = 5000 + Math.floor(Math.random() * 15001); // 5 à 20 s
   room.bombEnd = Date.now() + room.bombTotal;
   room.currentWord = randPatateWords();
   if (room.bombTimer) clearTimeout(room.bombTimer);
@@ -386,6 +386,15 @@ function passPotato(room) {
   } while (guard++ < room.turnIds.length);
   room.currentWord = randPatateWords();
   sendPotato(room);
+}
+// une faute de frappe rapproche l'explosion d'1 seconde (le client n'envoie qu'une pénalité par tour)
+// note : le minuteur de la bombe est caché côté client, donc pas besoin de renvoyer de message « potato »
+function penalizePatate(room) {
+  if (!room.bombTimer || room.state !== "playing") return;
+  const remaining = Math.max(0, room.bombEnd - Date.now() - 1000);
+  room.bombEnd = Date.now() + remaining;
+  clearTimeout(room.bombTimer);
+  room.bombTimer = setTimeout(() => explodePatate(room), remaining);
 }
 function explodePatate(room) {
   if (room.state !== "playing" || room.mode !== "patate") return;
@@ -521,6 +530,13 @@ wss.on("connection", (ws) => {
         if (!room || !ws.player || room.mode !== "patate" || room.state !== "playing") return;
         if (!room.turnIds || room.turnIds[room.holderIdx] !== ws.player.id) return;
         passPotato(room);
+        break;
+      }
+      case "typo": {
+        // le porteur a fait une faute → la bombe explose 1 s plus tôt (1 seule pénalité par tour, gérée côté client)
+        if (!room || !ws.player || room.mode !== "patate" || room.state !== "playing") return;
+        if (!room.turnIds || room.turnIds[room.holderIdx] !== ws.player.id) return;
+        penalizePatate(room);
         break;
       }
       case "finished": {
