@@ -166,6 +166,7 @@ const ELIM_COUNT = 50;                   // nb de mots par manche (élimination,
 const ELIM_DURATION_MS = 18000;          // durée d'une manche
 const ELIM_GAP_MS = 3500;                // pause entre les manches
 const WORD_COURSE_COUNT = 40;            // nb de mots à taper en course (contenu « mots »)
+const PATATE_WORD_COUNT = 3;             // nb de mots à taper pour refiler la patate
 
 const MODES = ["course", "elimination", "patate", "hard"];
 function normMode(m) { return MODES.includes(m) ? m : "course"; }
@@ -331,6 +332,16 @@ function randWord() {
   const list = WORDS.common;
   return list[Math.floor(Math.random() * list.length)];
 }
+// plusieurs mots séparés par des espaces : le joueur doit tous les taper pour passer la patate
+function randPatateWords() {
+  const out = [];
+  for (let i = 0; i < PATATE_WORD_COUNT; i++) {
+    let w = randWord();
+    if (i > 0) { while (w === out[i - 1]) w = randWord(); } // évite deux mots identiques à la suite
+    out.push(w);
+  }
+  return out.join(" ");
+}
 function startPatate(room) {
   room.state = "playing";
   room.elimOrder = [];
@@ -349,7 +360,7 @@ function beginPatateRound(room) {
   room.holderIdx = Math.floor(Math.random() * room.turnIds.length);
   room.bombTotal = 6000 + Math.floor(Math.random() * 8000); // 6 à 14 s
   room.bombEnd = Date.now() + room.bombTotal;
-  room.currentWord = randWord();
+  room.currentWord = randPatateWords();
   if (room.bombTimer) clearTimeout(room.bombTimer);
   room.bombTimer = setTimeout(() => explodePatate(room), room.bombTotal);
   sendPotato(room);
@@ -373,7 +384,7 @@ function passPotato(room) {
     const p = room.players.get(room.turnIds[room.holderIdx]);
     if (p && !p.eliminated) break;
   } while (guard++ < room.turnIds.length);
-  room.currentWord = randWord();
+  room.currentWord = randPatateWords();
   sendPotato(room);
 }
 function explodePatate(room) {
