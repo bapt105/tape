@@ -97,6 +97,166 @@ function dedupeAll() {
   return changed;
 }
 
+/* ============================================================
+   CLASSEMENT (scores des joueurs)
+   -----------------------------------------------------------
+   Même principe que les mots : on garde tout en mémoire, et on sauvegarde
+   dans scores-data.json (fichier local) ET dans Upstash (en ligne) si les
+   2 variables d'environnement sont définies. On réutilise EXACTEMENT la même
+   base Upstash que les mots — juste une autre « clé » (tape:scores) — donc
+   AUCUNE configuration supplémentaire à faire : ça marche dès que les mots
+   sont déjà sauvegardés en ligne.
+
+   Pour chaque pseudo on conserve un « profil » :
+     - des totaux cumulés (pour les moyennes et les records, sur TOUTES les
+       parties depuis toujours) ;
+     - le détail par mode (mots / texte / zen / difficile / speed) ;
+     - les N dernières parties (pour tracer les COURBES de progression).
+   ============================================================ */
+const SCORES_FILE = path.join(__dirname, "scores-data.json");
+const SCORES_STORE_KEY = "tape:scores";
+const SCORE_MODES = ["mots", "texte", "zen", "difficile", "speed"];
+const RUNS_KEPT = 100;           // nb de parties gardées par joueur (pour les courbes)
+const MAX_PROFILES = 500;        // garde-fou : nb max de profils conservés
+const SCORES = { players: {} };  // pseudo -> profil
+
+// Borne un nombre dans [min, max] (et remplace les valeurs invalides par `dflt`).
+function clampNum(v, min, max, dflt = 0) {
+  v = Number(v);
+  if (!Number.isFinite(v)) return dflt;
+  return Math.max(min, Math.min(max, Math.round(v)));
+}
+// Nettoie un pseudo (comme pour les joueurs multi : 14 caractères max).
+function cleanName(name) {
+  name = (name || "").toString().replace(/\s+/g, " ").trim().slice(0, 14);
+  return name || "joueur";
+}
+function emptyProfile(name) {
+  const t = Date.now();
+  return {
+    name, firstSeen: t, lastSeen: t,
+    count: 0, sumWpm: 0, sumAcc: 0, sumChars: 0, sumTimeMs: 0,
+    bestWpm: 0, bestMode: null,
+    modes: {},   // mode -> { count, sumWpm, sumAcc, bestWpm }
+    runs: [],    // { t, mode, wpm, acc, chars, timeMs }
+  };
+}
+
+// Enregistre une partie terminée. Renvoie le profil mis à jour (ou null si
+// la partie est trop courte/invalide pour compter).
+function recordScore({ name, mode, wpm, acc, chars, timeMs }) {
+  if (!SCORE_MODES.includes(mode)) return null;
+  wpm = clampNum(wpm, 0, 400);
+  acc = clampNum(acc, 0, 100);
+  chars = clampNum(chars, 0, 100000);
+  timeMs = clampNum(timeMs, 0, 3600000);
+  if (wpm < 1 || chars < 1) return null; // rien tapé → on n'enregistre pas
+
+  const key = cleanName(name);
+  let p = SCORES.players[key];
+  if (!p) {
+    // garde-fou anti-débordement : si trop de profils, on retire le plus ancien
+    const names = Object.keys(SCORES.players);
+    if (names.length >= MAX_PROFILES) {
+      let oldest = names[0];
+      for (const n of names) if (SCORES.players[n].lastSeen < SCORES.players[oldest].lastSeen) oldest = n;
+      delete SCORES.players[oldest];
+    }
+    p = emptyProfile(key);
+    SCORES.players[key] = p;
+  }
+  p.lastSeen = Date.now();
+  p.count++; p.sumWpm += wpm; p.sumAcc += acc; p.sumChars += chars; p.sumTimeMs += timeMs;
+  if (wpm > p.bestWpm) { p.bestWpm = wpm; p.bestMode = mode; }
+
+  let m = p.modes[mode];
+  if (!m) { m = { count: 0, sumWpm: 0, sumAcc: 0, bestWpm: 0 }; p.modes[mode] = m; }
+  m.count++; m.sumWpm += wpm; m.sumAcc += acc; if (wpm > m.bestWpm) m.bestWpm = wpm;
+
+  p.runs.push({ t: Date.now(), mode, wpm, acc, chars, timeMs });
+  if (p.runs.length > RUNS_KEPT) p.runs.splice(0, p.runs.length - RUNS_KEPT);
+
+  persistScores();
+  return p;
+}
+
+// Construit le tableau du classement, trié (record décroissant). `mode` peut
+// être "tous" (record toutes catégories) ou un mode précis.
+function leaderboard(mode) {
+  const list = [];
+  for (const p of Object.values(SCORES.players)) {
+    if (mode === "tous") {
+      if (p.count <= 0) continue;
+      list.push({
+        name: p.name, bestWpm: p.bestWpm, bestMode: p.bestMode,
+        avgWpm: Math.round(p.sumWpm / p.count), avgAcc: Math.round(p.sumAcc / p.count),
+        count: p.count,
+      });
+    } else {
+      const m = p.modes[mode];
+      if (!m || m.count <= 0) continue;
+      list.push({
+        name: p.name, bestWpm: m.bestWpm, bestMode: mode,
+        avgWpm: Math.round(m.sumWpm / m.count), avgAcc: Math.round(m.sumAcc / m.count),
+        count: m.count,
+      });
+    }
+  }
+  list.sort((a, b) => (b.bestWpm - a.bestWpm) || (b.avgWpm - a.avgWpm) || (b.count - a.count));
+  return list;
+}
+// Position d'un joueur au classement « toutes catégories ».
+function rankOf(name) {
+  const lb = leaderboard("tous");
+  const i = lb.findIndex((x) => x.name === name);
+  return { rank: i < 0 ? null : i + 1, total: lb.length };
+}
+
+// --- Sauvegarde du classement (fichier local) ---
+function loadScoresFile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(SCORES_FILE, "utf8"));
+    if (data && data.players && typeof data.players === "object") { SCORES.players = data.players; return true; }
+  } catch { /* pas de fichier → on démarre avec un classement vide */ }
+  return false;
+}
+function saveScoresFile() {
+  try {
+    const tmp = SCORES_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(SCORES));
+    fs.renameSync(tmp, SCORES_FILE);
+  } catch (e) { console.error("[saveScoresFile]", e); }
+}
+// --- Sauvegarde du classement (Upstash, même base que les mots) ---
+async function loadScoresStore() {
+  const raw = await storeCommand(["GET", SCORES_STORE_KEY]);
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    if (data && data.players && typeof data.players === "object") { SCORES.players = data.players; return true; }
+  } catch { /* contenu illisible → on ignore */ }
+  return false;
+}
+async function saveScoresStore() {
+  await storeCommand(["SET", SCORES_STORE_KEY, JSON.stringify(SCORES)]);
+}
+
+// Sauvegarde « groupée » : on n'écrit pas à chaque partie (sinon on martèle
+// Upstash). On programme une écriture ~2,5 s après le 1er changement, qui
+// emporte tous les changements accumulés entre-temps.
+let scoresTimer = null;
+function persistScores() {
+  if (scoresTimer) return;
+  scoresTimer = setTimeout(async () => {
+    scoresTimer = null;
+    saveScoresFile();
+    if (storeEnabled) {
+      try { await saveScoresStore(); }
+      catch (e) { console.error("[classement en ligne] écriture impossible :", e.message); }
+    }
+  }, 2500);
+}
+
 // Port/IP d'écoute :
 // - AlwaysData fournit ALWAYSDATA_HTTPD_PORT / ALWAYSDATA_HTTPD_IP
 // - Render/Railway/Heroku fournissent PORT
@@ -189,6 +349,38 @@ const server = http.createServer((req, res) => {
 
       if (changed) await persist();
       return sendJson(res, 200, { lists: WORDS, message });
+    });
+    return;
+  }
+
+  /* ---------- API : classement ---------- */
+  // Le tableau du classement (trié), filtrable par mode (?mode=tous|mots|…).
+  if (urlPath === "/api/leaderboard" && req.method === "GET") {
+    let mode = "tous";
+    try { mode = new URL(req.url, "http://x").searchParams.get("mode") || "tous"; } catch {}
+    if (mode !== "tous" && !SCORE_MODES.includes(mode)) mode = "tous";
+    return sendJson(res, 200, { mode, players: leaderboard(mode) });
+  }
+  // Le profil détaillé d'un joueur (stats + historique pour les courbes).
+  if (urlPath === "/api/profile" && req.method === "GET") {
+    let name = "";
+    try { name = new URL(req.url, "http://x").searchParams.get("name") || ""; } catch {}
+    const p = SCORES.players[cleanName(name)] || null;
+    return sendJson(res, 200, { profile: p, rank: p ? rankOf(p.name) : null });
+  }
+  // Enregistre une partie terminée (envoyé par le client à la fin d'un solo).
+  if (urlPath === "/api/score" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+    req.on("end", () => {
+      let msg; try { msg = JSON.parse(body); } catch { return sendJson(res, 400, { error: "requête invalide" }); }
+      const p = recordScore({
+        name: msg.name, mode: msg.mode,
+        wpm: msg.wpm, acc: msg.accuracy, chars: msg.chars, timeMs: msg.timeMs,
+      });
+      if (!p) return sendJson(res, 200, { ok: true, recorded: false });
+      const { rank, total } = rankOf(p.name);
+      return sendJson(res, 200, { ok: true, recorded: true, profile: p, rank, total });
     });
     return;
   }
@@ -732,6 +924,14 @@ async function init() {
   if (storeEnabled && storeOk && (!fromStore || deduped)) {
     try { await saveStore(); }
     catch (e) { console.error("[stockage en ligne] écriture impossible :", e.message); storeOk = false; }
+  }
+
+  // Classement : on charge le fichier local puis, s'il existe, le stockage en
+  // ligne (qui fait foi). Comme pour les mots, l'en-ligne survit aux redémarrages.
+  loadScoresFile();
+  if (storeEnabled) {
+    try { await loadScoresStore(); }
+    catch (e) { console.error("[classement en ligne] lecture impossible :", e.message); }
   }
 
   server.listen(PORT, HOST, () => {

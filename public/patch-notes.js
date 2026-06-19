@@ -18,6 +18,16 @@
    ============================================================ */
 const PATCH_NOTES = [
   {
+    version: "1.3",
+    date: "2026-06-19",
+    changes: [
+      "Nouveau : un CLASSEMENT en ligne ! Chaque partie solo est enregistrée sous ton pseudo.",
+      "Nouvel écran « mon profil » : meilleur score, vitesse et précision moyennes, parties jouées, caractères tapés, temps total…",
+      "Des courbes de progression pour suivre ton évolution (vitesse et précision sur tes dernières parties).",
+      "Le classement se filtre par mode (mots, texte, zen, difficile, speed) et se conserve en ligne, comme les mots.",
+    ],
+  },
+  {
     version: "1.2",
     date: "2026-06-19",
     changes: [

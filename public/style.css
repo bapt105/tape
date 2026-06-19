@@ -99,10 +99,13 @@ kbd {
 
 /* Carte multijoueur : mise en avant — plus grande, à droite, colorée. */
 .menu .card-multi {
-  grid-column: 2; grid-row: 1 / span 5;
+  grid-column: 2; grid-row: 1 / span 6;
   justify-content: center; gap: 9px; padding: 28px 26px;
   background: var(--accent); border-color: var(--accent); color: #1a1a1a;
 }
+/* Carte « classement » : dans la colonne de gauche, titre en couleur. */
+.menu .card-board { grid-column: 1; }
+.card-board .card-title { color: var(--accent); }
 .menu .card-multi:hover { border-color: var(--accent); filter: brightness(1.06); }
 .card-multi .card-title { font-size: 1.95rem; }
 .card-multi .card-desc { color: rgba(26, 26, 26, .72); font-size: .92rem; line-height: 1.45; }
@@ -412,6 +415,99 @@ kbd {
 .notes-changes li::before { content: "›"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
 
 /* ============================================================
+   CLASSEMENT (leaderboard + profil + courbes)
+   ============================================================ */
+
+/* --- Bloc « enregistré au classement » sous le résultat solo --- */
+.result-save { min-height: 1.4em; margin: -8px 0 24px; font-size: .9rem; }
+.rs-note { color: var(--muted); }
+.rs-note.err { color: var(--error); }
+.rs-ok { color: var(--good); }
+.rs-ok sup { font-size: .7em; }
+.rs-see { color: var(--accent); margin-left: 10px; }
+.rs-claim { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.rs-row { display: flex; gap: 8px; justify-content: center; }
+.rs-row input {
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  padding: 8px 11px; border-radius: 8px; outline: none; font-size: .95rem; font-family: inherit;
+}
+.rs-row input:focus { border-color: var(--accent); }
+.rs-row .btn { padding: 8px 16px; font-size: .85rem; }
+
+/* --- Pseudo + onglets --- */
+.lb-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.lb-id input {
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  padding: 8px 11px; border-radius: 8px; font-size: .95rem; outline: none; width: 160px; font-family: inherit;
+}
+.lb-id input:focus { border-color: var(--accent); }
+.lb-id .btn { padding: 8px 16px; font-size: .85rem; }
+.lb-id-note { color: var(--muted); font-size: .78rem; }
+.lb-tabs { margin-bottom: 18px; }
+
+.lb-loading, .lb-empty { color: var(--muted); font-size: .88rem; padding: 14px 4px; line-height: 1.55; }
+
+/* --- Tableau du classement --- */
+.lb-row {
+  display: grid; grid-template-columns: 40px 1fr 92px 60px 64px 56px;
+  align-items: center; gap: 6px; padding: 10px 12px;
+  background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px;
+  margin-bottom: 6px; font-size: .9rem;
+}
+.lb-head { background: none; border: none; color: var(--muted); font-size: .72rem; padding: 2px 12px; margin-bottom: 2px; }
+.lb-rank { font-weight: 700; color: var(--muted); }
+.lb-pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-val { text-align: right; color: var(--muted); }
+.lb-best { color: var(--accent); font-weight: 700; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.lb-badge { font-size: .6rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; white-space: nowrap; font-weight: 400; }
+.lb-row.mine { border-color: var(--accent); }
+.lb-row.mine .lb-pname { color: var(--accent); font-weight: 600; }
+
+/* --- Profil : grandes tuiles de stats --- */
+.profile-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.stat-card { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.stat-value { font-size: 1.7rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
+.stat-value small { font-size: .8rem; color: var(--muted); margin-left: 3px; font-weight: 400; }
+.stat-label { color: var(--muted); font-size: .78rem; margin-top: 8px; }
+.stat-extra { color: var(--text); opacity: .7; }
+
+/* --- Profil : courbes (graphiques SVG) --- */
+.profile-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+.chart-card { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.chart-title { font-size: .85rem; color: var(--text); margin-bottom: 8px; }
+.chart-title span { color: var(--muted); font-size: .75rem; }
+.chart-empty { color: var(--muted); font-size: .8rem; padding: 24px 0; text-align: center; }
+.chart { width: 100%; height: auto; display: block; color: var(--accent); }
+.chart--acc { color: var(--good); }
+.chart-grid { stroke: var(--line); stroke-width: 1; }
+.chart-area { fill: currentColor; opacity: .13; }
+.chart-line { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart-dot { fill: currentColor; }
+.chart-label { fill: var(--muted); font-size: 10px; }
+.chart-lastval { fill: currentColor; font-size: 11px; font-weight: 700; }
+
+/* --- Profil : détail par mode + dernières parties --- */
+.pm-title { font-size: .92rem; color: var(--text); margin: 6px 0 10px; font-weight: 600; }
+.pm-table { display: flex; flex-direction: column; gap: 5px; margin-bottom: 18px; }
+.pm-row {
+  display: grid; grid-template-columns: 1fr 70px 70px 60px 60px; gap: 6px; align-items: center;
+  padding: 8px 12px; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; font-size: .85rem;
+}
+.pm-row > span { text-align: right; color: var(--muted); }
+.pm-row > span:first-child { text-align: left; color: var(--text); }
+.pm-head { background: none; border: none; color: var(--muted); font-size: .72rem; padding: 2px 12px; }
+.pm-head > span:first-child { color: var(--muted); }
+.pm-best { color: var(--accent) !important; font-weight: 700; }
+.runs-list { display: flex; flex-direction: column; gap: 5px; }
+.run-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 14px;
+  padding: 8px 12px; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; font-size: .85rem;
+}
+.run-mode { color: var(--text); }
+.run-wpm { color: var(--accent); font-weight: 600; }
+.run-acc { color: var(--muted); }
+
+/* ============================================================
    ANIMATIONS (sobres, dans l'esprit minimaliste)
    ============================================================ */
 
@@ -506,4 +602,10 @@ kbd {
   .big { font-size: 2.6rem; }
   #app { padding: 6px 16px 30px; }
   .bar { padding: 14px 16px; }
+  /* Classement : on resserre les tableaux et on empile les courbes. */
+  .profile-charts { grid-template-columns: 1fr; }
+  .profile-cards { grid-template-columns: repeat(2, 1fr); }
+  .lb-row { grid-template-columns: 30px 1fr 64px 48px 46px 46px; font-size: .78rem; gap: 4px; padding: 8px; }
+  .lb-head { padding: 2px 8px; }
+  .pm-row { grid-template-columns: 1fr 50px 56px 48px 50px; font-size: .76rem; padding: 7px 9px; }
 }

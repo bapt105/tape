@@ -434,6 +434,7 @@ function showResult(s, label) {
   $("#res-time").textContent = Math.round(s.elapsedMs / 1000);
   $("#res-mode").textContent = label;
   go("result");
+  renderResultSave(labelToMode(label), s); // proposer d'enregistrer au classement
 }
 $("#res-again").addEventListener("click", () => go(lastSoloMode));
 
@@ -1214,6 +1215,290 @@ $("#chat-form").addEventListener("submit", (e) => {
   sendWs({ type: "chat", text });
   input.value = "";
 });
+
+/* ============================================================
+   CLASSEMENT (leaderboard + profil + courbes de progression)
+   ------------------------------------------------------------
+   - chaque partie solo terminée est envoyée au serveur (/api/score) sous ton
+     pseudo ; le serveur calcule moyennes, records et garde l'historique ;
+   - l'écran « classement » a deux vues : le classement global (filtrable par
+     mode) et « mon profil » (stats détaillées + courbes).
+   Tout passe par de simples requêtes HTTP : pas besoin du WebSocket. Hors-ligne
+   (fichier ouvert sans serveur), le classement affiche un message d'info.
+   ============================================================ */
+
+// Les 5 modes solo, avec leur libellé lisible.
+const MODE_LABELS = { mots: "mots courants", texte: "texte", zen: "zen", difficile: "difficile", speed: "speed" };
+const SOLO_MODES = ["mots", "texte", "zen", "difficile", "speed"];
+
+// Convertit le libellé d'un résultat solo en clé de mode pour le classement.
+function labelToMode(label) {
+  return label === "texte" ? "texte"
+    : label === "zen" ? "zen"
+    : label === "difficile" ? "difficile"
+    : label === "speed" ? "speed"
+    : "mots"; // "mots courants"
+}
+
+const isOffline = () => location.protocol === "file:";
+function currentPseudo() { return (localStorage.getItem("tape-name") || "").trim(); }
+function setPseudo(name) {
+  name = (name || "").trim().slice(0, 14);
+  localStorage.setItem("tape-name", name);
+  const mp = $("#mp-name"); if (mp) mp.value = name;
+  const lb = $("#lb-name"); if (lb) lb.value = name;
+  return name;
+}
+
+/* ----- Envoi d'un score à la fin d'un solo ----- */
+async function submitScore(modeKey, s) {
+  try {
+    const res = await fetch("/api/score", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: currentPseudo(), mode: modeKey,
+        wpm: s.wpm, accuracy: s.accuracy, chars: s.correctChars, timeMs: Math.round(s.elapsedMs),
+      }),
+    });
+    return await res.json();
+  } catch { return null; }
+}
+
+// Affiche le bloc « enregistré au classement » sous le résultat solo.
+function renderResultSave(modeKey, s) {
+  const box = $("#result-save");
+  if (!box) return;
+  if (isOffline()) { box.innerHTML = '<span class="rs-note">classement indisponible hors-ligne</span>'; return; }
+  if (!currentPseudo()) {
+    // pas encore de pseudo : on propose d'en choisir un pour « réclamer » le score
+    box.innerHTML = `<div class="rs-claim">
+        <span class="rs-note">choisis un pseudo pour enregistrer ce score :</span>
+        <span class="rs-row">
+          <input type="text" id="rs-name" maxlength="14" placeholder="ton pseudo" autocomplete="off" />
+          <button class="btn" id="rs-save">enregistrer</button>
+        </span>
+      </div>`;
+    const save = () => {
+      const n = setPseudo($("#rs-name").value);
+      if (!n) { $("#rs-name").focus(); return; }
+      doSubmitScore(modeKey, s);
+    };
+    $("#rs-save").addEventListener("click", save);
+    $("#rs-name").addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    return;
+  }
+  doSubmitScore(modeKey, s);
+}
+async function doSubmitScore(modeKey, s) {
+  const box = $("#result-save");
+  box.innerHTML = '<span class="rs-note">enregistrement…</span>';
+  const r = await submitScore(modeKey, s);
+  if (!r || !r.ok) { box.innerHTML = '<span class="rs-note err">classement injoignable — le serveur est-il lancé ?</span>'; return; }
+  if (!r.recorded) { box.innerHTML = '<span class="rs-note">score trop court pour le classement</span>'; return; }
+  const rankTxt = r.rank ? ` · <b>${r.rank}<sup>e</sup></b> sur ${r.total}` : "";
+  box.innerHTML = `<span class="rs-ok">✓ enregistré au classement (${escapeText(currentPseudo())})${rankTxt}</span>
+      <button class="link rs-see" id="rs-see">voir le classement →</button>`;
+  $("#rs-see").addEventListener("click", () => go("leaderboard"));
+}
+
+/* ----- Petit graphique en courbe (SVG, sans librairie) ----- */
+// values = suite de nombres (chronologique). Renvoie un <svg> qui s'adapte à la
+// largeur de son conteneur et se recolore selon le thème (via currentColor).
+function buildLineChart(values, opts = {}) {
+  const W = 560, H = 170, padL = 10, padR = 30, padT = 16, padB = 22;
+  const cls = opts.cls || "", suffix = opts.suffix || "";
+  const n = values.length;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  let max = opts.yMax != null ? opts.yMax : Math.max(...values);
+  let min = opts.yMin != null ? opts.yMin : Math.min(...values);
+  if (max === min) { max += 1; min = Math.max(0, min - 1); }
+  const range = max - min || 1;
+  const X = (i) => padL + (n <= 1 ? innerW / 2 : (innerW * i) / (n - 1));
+  const Y = (v) => padT + innerH * (1 - (v - min) / range);
+
+  let grid = "";
+  for (let g = 0; g <= 2; g++) {
+    const val = min + (range * g) / 2, yy = Y(val);
+    grid += `<line class="chart-grid" x1="${padL}" y1="${yy.toFixed(1)}" x2="${(padL + innerW).toFixed(1)}" y2="${yy.toFixed(1)}"/>`;
+    grid += `<text class="chart-label" x="${(padL + innerW + 5).toFixed(1)}" y="${(yy + 3.5).toFixed(1)}">${Math.round(val)}</text>`;
+  }
+  const pts = values.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+  const area = `${padL},${(padT + innerH).toFixed(1)} ${pts} ${(padL + innerW).toFixed(1)},${(padT + innerH).toFixed(1)}`;
+  const lastX = X(n - 1), lastY = Y(values[n - 1]);
+  return `<svg class="chart ${cls}" viewBox="0 0 ${W} ${H}" role="img" aria-label="courbe">
+      ${grid}
+      <polygon class="chart-area" points="${area}"/>
+      <polyline class="chart-line" points="${pts}"/>
+      <circle class="chart-dot" cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3.6"/>
+      <text class="chart-lastval" x="${(lastX - 5).toFixed(1)}" y="${(lastY - 8).toFixed(1)}" text-anchor="end">${values[n - 1]}${suffix}</text>
+    </svg>`;
+}
+
+// Formate une durée (ms) en texte court : « 45 s », « 3 min 20 s », « 1 h 05 ».
+function fmtDuration(ms) {
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return sec + " s";
+  const min = Math.floor(sec / 60), s = sec % 60;
+  if (min < 60) return `${min} min ${String(s).padStart(2, "0")}`;
+  const h = Math.floor(min / 60);
+  return `${h} h ${String(min % 60).padStart(2, "0")}`;
+}
+function offlineHtml() {
+  return '<p class="lb-empty">Le classement a besoin du serveur. Lance « node server.js » puis ouvre le jeu via http://localhost:3000 (pas en double-cliquant le fichier).</p>';
+}
+
+/* ----- État de l'écran classement ----- */
+let lbTab = "ranking", lbMode = "tous";
+
+onEnter["leaderboard"] = () => {
+  $("#lb-name").value = currentPseudo();
+  $("#lb-id-note").textContent = currentPseudo() ? "" : "choisis un pseudo pour suivre ta progression";
+  showLbTab(lbTab);
+};
+
+function showLbTab(tab) {
+  lbTab = tab;
+  $$("#lb-tabs .opt").forEach((b) => b.classList.toggle("active", b.dataset.lbtab === tab));
+  $("#lb-ranking-view").classList.toggle("hidden", tab !== "ranking");
+  $("#lb-profile-view").classList.toggle("hidden", tab !== "profile");
+  if (tab === "ranking") renderLeaderboard();
+  else renderProfile();
+}
+
+/* ----- Vue : classement global ----- */
+async function renderLeaderboard() {
+  const view = $("#lb-table");
+  if (isOffline()) { view.innerHTML = offlineHtml(); return; }
+  view.innerHTML = '<p class="lb-loading">chargement…</p>';
+  let data;
+  try { data = await (await fetch(`/api/leaderboard?mode=${encodeURIComponent(lbMode)}`)).json(); }
+  catch { view.innerHTML = '<p class="lb-empty">classement injoignable — le serveur est-il lancé ?</p>'; return; }
+  const players = data.players || [];
+  if (!players.length) {
+    view.innerHTML = '<p class="lb-empty">Aucun score pour l\'instant. Joue une partie solo pour ouvrir le classement !</p>';
+    return;
+  }
+  const me = currentPseudo();
+  let html = `<div class="lb-row lb-head">
+      <span class="lb-rank">#</span><span class="lb-pname">joueur</span>
+      <span class="lb-val">record</span><span class="lb-val">moy.</span>
+      <span class="lb-val">parties</span><span class="lb-val">préc.</span>
+    </div>`;
+  players.forEach((p, i) => {
+    const mine = me && p.name === me;
+    const badge = lbMode === "tous" && p.bestMode ? `<span class="lb-badge">${escapeText(MODE_LABELS[p.bestMode] || p.bestMode)}</span>` : "";
+    const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : (i + 1);
+    html += `<div class="lb-row${mine ? " mine" : ""}">
+        <span class="lb-rank">${medal}</span>
+        <span class="lb-pname">${escapeText(p.name)}${mine ? " (toi)" : ""}</span>
+        <span class="lb-val lb-best">${p.bestWpm}${badge}</span>
+        <span class="lb-val">${p.avgWpm}</span>
+        <span class="lb-val">${p.count}</span>
+        <span class="lb-val">${p.avgAcc}%</span>
+      </div>`;
+  });
+  view.innerHTML = html;
+}
+
+/* ----- Vue : mon profil ----- */
+async function renderProfile() {
+  const cards = $("#profile-cards"), charts = $("#profile-charts"),
+        modesEl = $("#profile-modes"), runsEl = $("#profile-runs");
+  const clear = (extra = "") => { charts.innerHTML = ""; modesEl.innerHTML = ""; runsEl.innerHTML = ""; cards.innerHTML = extra; };
+  if (isOffline()) { clear(offlineHtml()); return; }
+  const pseudo = currentPseudo();
+  if (!pseudo) { clear('<p class="lb-empty">Choisis un pseudo ci-dessus, puis joue une partie solo pour voir tes statistiques et tes courbes.</p>'); return; }
+
+  cards.innerHTML = '<p class="lb-loading">chargement…</p>';
+  let data;
+  try { data = await (await fetch(`/api/profile?name=${encodeURIComponent(pseudo)}`)).json(); }
+  catch { clear('<p class="lb-empty">profil injoignable — le serveur est-il lancé ?</p>'); return; }
+  const p = data.profile;
+  if (!p || !p.count) { clear(`<p class="lb-empty">Pas encore de partie enregistrée pour « ${escapeText(pseudo)} ». Joue une partie solo !</p>`); return; }
+
+  const avgWpm = Math.round(p.sumWpm / p.count), avgAcc = Math.round(p.sumAcc / p.count);
+  const rank = data.rank && data.rank.rank;
+  // grandes tuiles de stats
+  cards.innerHTML = [
+    statCard(p.bestWpm, "mpm", "meilleur score", p.bestMode ? MODE_LABELS[p.bestMode] : ""),
+    statCard(avgWpm, "mpm", "vitesse moyenne"),
+    statCard(avgAcc, "%", "précision moyenne"),
+    statCard(p.count, "", "parties jouées"),
+    statCard(p.sumChars.toLocaleString("fr-FR"), "", "caractères tapés"),
+    statCard(fmtDuration(p.sumTimeMs), "", "temps total"),
+    statCard(rank ? rank + "ᵉ" : "—", "", "rang au classement"),
+  ].join("");
+
+  // courbes : mpm et précision sur les dernières parties
+  const recent = (p.runs || []).slice(-30);
+  const wpmSeries = recent.map((r) => r.wpm);
+  const accSeries = recent.map((r) => r.acc);
+  const enough = recent.length >= 2;
+  charts.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">évolution de la vitesse <span>(${recent.length} dernière(s) partie(s))</span></div>
+      ${enough ? buildLineChart(wpmSeries, { suffix: "", cls: "" }) : '<p class="chart-empty">Joue au moins 2 parties pour voir la courbe.</p>'}
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">évolution de la précision <span>(%)</span></div>
+      ${enough ? buildLineChart(accSeries, { suffix: "%", cls: "chart--acc", yMin: Math.max(0, Math.min(...accSeries) - 5), yMax: 100 }) : '<p class="chart-empty">Joue au moins 2 parties pour voir la courbe.</p>'}
+    </div>`;
+
+  // détail par mode
+  let rows = "";
+  SOLO_MODES.forEach((mk) => {
+    const m = p.modes[mk];
+    if (!m || !m.count) return;
+    rows += `<div class="pm-row">
+        <span class="pm-mode">${MODE_LABELS[mk]}</span>
+        <span>${m.count}</span>
+        <span class="pm-best">${m.bestWpm}</span>
+        <span>${Math.round(m.sumWpm / m.count)}</span>
+        <span>${Math.round(m.sumAcc / m.count)}%</span>
+      </div>`;
+  });
+  modesEl.innerHTML = rows ? `<div class="pm-title">détail par mode</div>
+      <div class="pm-table">
+        <div class="pm-row pm-head"><span>mode</span><span>parties</span><span>record</span><span>moy.</span><span>préc.</span></div>
+        ${rows}
+      </div>` : "";
+
+  // dernières parties
+  const last = (p.runs || []).slice(-8).reverse();
+  runsEl.innerHTML = last.length ? `<div class="pm-title">dernières parties</div>
+      <div class="runs-list">${last.map((r) => `
+        <div class="run-row">
+          <span class="run-mode">${escapeText(MODE_LABELS[r.mode] || r.mode)}</span>
+          <span class="run-wpm">${r.wpm} mpm</span>
+          <span class="run-acc">${r.acc}%</span>
+        </div>`).join("")}</div>` : "";
+}
+
+function statCard(value, unit, label, extra) {
+  return `<div class="stat-card">
+      <div class="stat-value">${value}${unit ? `<small>${unit}</small>` : ""}</div>
+      <div class="stat-label">${label}${extra ? ` <span class="stat-extra">${escapeText(extra)}</span>` : ""}</div>
+    </div>`;
+}
+
+/* ----- Branchements de l'écran classement ----- */
+$("#lb-name-save").addEventListener("click", () => {
+  const n = setPseudo($("#lb-name").value);
+  $("#lb-id-note").textContent = n ? "pseudo enregistré ✓" : "entre un pseudo";
+  if (lbTab === "profile") renderProfile();
+  else renderLeaderboard();
+});
+$("#lb-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#lb-name-save").click(); });
+$$("#lb-tabs .opt").forEach((b) => b.addEventListener("click", () => showLbTab(b.dataset.lbtab)));
+$$("#lb-mode-filter .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#lb-mode-filter .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    lbMode = b.dataset.lbmode;
+    renderLeaderboard();
+  })
+);
 
 /* ---------- démarrage ---------- */
 loadWordData();

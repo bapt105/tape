@@ -12,6 +12,7 @@
     <button class="logo" data-go="home">tape<span>_</span></button>
     <nav class="bar-right">
       <button class="link" data-go="home">accueil</button>
+      <button class="link" data-go="leaderboard">classement</button>
       <button class="link" id="theme-toggle" title="Thème clair / sombre">◐</button>
     </nav>
   </header>
@@ -42,6 +43,10 @@
         <button class="card" data-go="solo-speed">
           <span class="card-title">speed</span>
           <span class="card-desc">mots simples sans accents — tape le plus vite possible</span>
+        </button>
+        <button class="card card-board" data-go="leaderboard">
+          <span class="card-title">🏆 classement</span>
+          <span class="card-desc">tes statistiques, tes records et tes courbes de progression</span>
         </button>
         <button class="card card-multi" data-go="multi-home">
           <span class="card-badge">en ligne</span>
@@ -154,10 +159,52 @@
           <span><b id="res-time">0</b> s</span>
           <span><b id="res-mode">—</b></span>
         </div>
+        <div class="result-save" id="result-save"></div>
         <div class="result-actions">
           <button class="btn" id="res-again">recommencer</button>
           <button class="btn ghost" data-go="home">accueil</button>
         </div>
+      </div>
+    </section>
+
+    <!-- ====================== CLASSEMENT ====================== -->
+    <section class="screen" id="screen-leaderboard">
+      <h2 class="title-sm">🏆 classement</h2>
+
+      <!-- pseudo : sert à relier tes parties à ton profil -->
+      <div class="lb-id">
+        <span class="opt-label">ton pseudo</span>
+        <input type="text" id="lb-name" maxlength="14" placeholder="joueur" autocomplete="off" />
+        <button class="btn" id="lb-name-save">enregistrer</button>
+        <span class="lb-id-note" id="lb-id-note"></span>
+      </div>
+
+      <!-- bascule classement / mon profil -->
+      <div class="mode-pick lb-tabs" id="lb-tabs">
+        <button class="opt active" data-lbtab="ranking">classement</button>
+        <button class="opt" data-lbtab="profile">mon profil</button>
+      </div>
+
+      <!-- VUE : classement global -->
+      <div id="lb-ranking-view">
+        <div class="options lb-mode-filter" id="lb-mode-filter">
+          <span class="opt-label">mode</span>
+          <button class="opt active" data-lbmode="tous">tous</button>
+          <button class="opt" data-lbmode="mots">mots</button>
+          <button class="opt" data-lbmode="texte">texte</button>
+          <button class="opt" data-lbmode="zen">zen</button>
+          <button class="opt" data-lbmode="difficile">difficile</button>
+          <button class="opt" data-lbmode="speed">speed</button>
+        </div>
+        <div class="lb-table" id="lb-table"></div>
+      </div>
+
+      <!-- VUE : mon profil (stats + courbes) -->
+      <div id="lb-profile-view" class="hidden">
+        <div class="profile-cards" id="profile-cards"></div>
+        <div class="profile-charts" id="profile-charts"></div>
+        <div class="profile-modes" id="profile-modes"></div>
+        <div class="profile-runs" id="profile-runs"></div>
       </div>
     </section>
 
