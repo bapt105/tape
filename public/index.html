@@ -39,9 +39,15 @@
           <span class="card-title">difficile</span>
           <span class="card-desc">mots compliqués et pleins d'accents</span>
         </button>
-        <button class="card" data-go="multi-home">
+        <button class="card" data-go="solo-speed">
+          <span class="card-title">speed</span>
+          <span class="card-desc">mots simples sans accents — tape le plus vite possible</span>
+        </button>
+        <button class="card card-multi" data-go="multi-home">
+          <span class="card-badge">en ligne</span>
           <span class="card-title">multijoueur</span>
-          <span class="card-desc">affronte tes amis en ligne</span>
+          <span class="card-desc">affronte tes amis : course, élimination, patate&nbsp;chaude…</span>
+          <span class="card-cta">jouer →</span>
         </button>
       </div>
     </section>
@@ -117,6 +123,25 @@
       <p class="hint">Mots difficiles, pleins d'accents. <kbd>Tab</kbd> pour recommencer.</p>
     </section>
 
+    <!-- ====================== SOLO : SPEED ====================== -->
+    <section class="screen" id="screen-solo-speed">
+      <div class="options" id="speed-options">
+        <span class="opt-label">durée</span>
+        <button class="opt" data-dur="15">15s</button>
+        <button class="opt active" data-dur="30">30s</button>
+        <button class="opt" data-dur="60">60s</button>
+        <button class="opt" data-dur="120">120s</button>
+      </div>
+      <div class="stats-live">
+        <span id="speed-timer">30</span>
+        <span id="speed-wpm">0 mpm</span>
+      </div>
+      <div class="typing" id="speed-typing" tabindex="0">
+        <div class="words" id="speed-stream"></div>
+      </div>
+      <p class="hint">Mots simples, sans accents. Tape vite ! <kbd>Tab</kbd> pour recommencer.</p>
+    </section>
+
     <!-- ====================== RÉSULTAT SOLO ====================== -->
     <section class="screen" id="screen-result">
       <div class="result">
@@ -155,6 +180,7 @@
               <button class="opt" data-mpmode="elimination">élimination</button>
               <button class="opt" data-mpmode="patate">patate chaude</button>
               <button class="opt" data-mpmode="hard">difficile</button>
+              <button class="opt" data-mpmode="speed">speed</button>
             </div>
             <p class="mode-desc" id="mp-mode-desc"></p>
             <button class="btn" id="mp-create">créer</button>
@@ -186,6 +212,7 @@
           <button class="opt" data-mpmode="elimination">élimination</button>
           <button class="opt" data-mpmode="patate">patate chaude</button>
           <button class="opt" data-mpmode="hard">difficile</button>
+          <button class="opt" data-mpmode="speed">speed</button>
         </div>
         <span class="lobby-mode-note" id="lobby-mode-note"></span>
       </div>
@@ -197,6 +224,16 @@
         <button class="btn ghost" id="lobby-leave">quitter</button>
       </div>
       <p class="hint" id="lobby-hint">Quand tout le monde est prêt, l'hôte lance la partie.</p>
+
+      <!-- Chat du salon -->
+      <div class="lobby-chat">
+        <div class="lobby-chat-head">💬 chat du salon</div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <form class="chat-form" id="chat-form">
+          <input type="text" id="chat-input" maxlength="200" placeholder="écris un message…" autocomplete="off" />
+          <button class="btn" type="submit" id="chat-send">envoyer</button>
+        </form>
+      </div>
     </section>
 
     <!-- ====================== MULTI : PARTIE ====================== -->
@@ -237,6 +274,7 @@
     <span class="foot-logo">TAPE<span>_</span></span>
     <span class="foot-right">
       <span class="foot-credit">créé par baptiste jacquet</span>
+      <button class="foot-admin" id="notes-open">✨ nouveautés</button>
       <button class="foot-admin" id="admin-open">admin</button>
     </span>
   </footer>
@@ -260,6 +298,7 @@
         <div class="mode-pick admin-tabs" id="admin-tabs">
           <button class="opt active" data-list="common">mots courants</button>
           <button class="opt" data-list="hard">difficile</button>
+          <button class="opt" data-list="speed">speed</button>
           <button class="opt" data-list="texts">textes</button>
         </div>
         <p class="admin-hint" id="admin-list-hint"></p>
@@ -275,7 +314,18 @@
     </div>
   </div>
 
+  <!-- ====================== NOUVEAUTÉS (patch notes) ====================== -->
+  <div class="admin-overlay hidden" id="notes-overlay">
+    <div class="admin-modal">
+      <button class="admin-close" id="notes-close" title="Fermer">×</button>
+      <h2 class="admin-h">✨ nouveautés</h2>
+      <p class="admin-desc">Ce qui a changé sur le jeu, des plus récentes aux plus anciennes.</p>
+      <div class="notes-list" id="notes-list"></div>
+    </div>
+  </div>
+
   <script src="words.js"></script>
+  <script src="patch-notes.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

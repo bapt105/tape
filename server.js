@@ -8,42 +8,94 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
-const { COMMON_WORDS, HARD_WORDS, TEXTS } = require("./public/words.js");
+const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS } = require("./public/words.js");
 
 /* ---------- Mots & textes modifiables (admin) ----------
    Source de vérité partagée par tous les joueurs.
-   Les listes par défaut viennent de words.js ; toute modification faite
-   via le panneau « admin » est sauvegardée dans words-data.json, donc
-   conservée même après un redémarrage du serveur. */
+   Les listes par défaut viennent de words.js. Toute modification faite via le
+   panneau « admin » est conservée à DEUX endroits :
+     1) le fichier local words-data.json (pratique quand on teste sur son PC) ;
+     2) un petit stockage en ligne « Upstash Redis » — UNIQUEMENT si les
+        variables d'environnement UPSTASH_REDIS_REST_URL et
+        UPSTASH_REDIS_REST_TOKEN sont définies.
+   Le point 2 est indispensable sur les hébergeurs « jetables » (Render, etc.)
+   où le disque repart de zéro à chaque redémarrage : le fichier y est effacé,
+   mais le stockage en ligne, lui, survit. En local (sans ces variables) on
+   garde simplement le fichier — rien ne change. */
 const WORDS_FILE = path.join(__dirname, "words-data.json");
 const ADMIN_PASSWORD = "azerty";
-const WORDS = { common: [...COMMON_WORDS], hard: [...HARD_WORDS], texts: [...TEXTS] };
+const WORDS = { common: [...COMMON_WORDS], hard: [...HARD_WORDS], speed: [...SPEED_WORDS], texts: [...TEXTS] };
+// Les listes gérables par l'admin (et sauvegardées).
+const LIST_KEYS = ["common", "hard", "speed", "texts"];
 
-function loadWords() {
-  try {
-    const data = JSON.parse(fs.readFileSync(WORDS_FILE, "utf8"));
-    for (const key of ["common", "hard", "texts"]) {
-      if (Array.isArray(data[key]) && data[key].length) WORDS[key] = data[key];
-    }
-  } catch { /* pas de fichier → on garde les listes par défaut */ }
+// Stockage en ligne (optionnel) — actif seulement si les 2 variables existent.
+const STORE_URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const STORE_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+const STORE_KEY = "tape:words";
+const storeEnabled = Boolean(STORE_URL && STORE_TOKEN);
+
+// Recopie les listes valides de `data` dans WORDS. Renvoie true si au moins une.
+function applyData(data) {
+  let any = false;
+  for (const key of LIST_KEYS) {
+    if (Array.isArray(data[key]) && data[key].length) { WORDS[key] = data[key]; any = true; }
+  }
+  return any;
 }
-function saveWords() {
-  try { fs.writeFileSync(WORDS_FILE, JSON.stringify(WORDS, null, 2)); }
-  catch (e) { console.error("[saveWords]", e); }
+
+// --- Fichier local ---
+function loadFile() {
+  try { return applyData(JSON.parse(fs.readFileSync(WORDS_FILE, "utf8"))); }
+  catch { return false; } // pas de fichier → on garde les listes par défaut
 }
+function saveFile() {
+  try { // écriture « atomique » : fichier temporaire puis renommage (anti-corruption)
+    const tmp = WORDS_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(WORDS, null, 2));
+    fs.renameSync(tmp, WORDS_FILE);
+  } catch (e) { console.error("[saveFile]", e); }
+}
+
+// --- Stockage en ligne (Upstash Redis, API REST) ---
+async function storeCommand(args) {
+  const res = await fetch(STORE_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${STORE_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+    signal: AbortSignal.timeout(5000), // 5 s max : ne jamais bloquer le jeu si Upstash traîne
+  });
+  if (!res.ok) throw new Error(`Upstash HTTP ${res.status}`);
+  return (await res.json()).result;
+}
+async function loadStore() {
+  const raw = await storeCommand(["GET", STORE_KEY]);
+  if (!raw) return false;            // rien d'enregistré pour l'instant
+  try { return applyData(JSON.parse(raw)); } catch { return false; }
+}
+async function saveStore() {
+  await storeCommand(["SET", STORE_KEY, JSON.stringify(WORDS)]);
+}
+
+// Sauvegarde « tout » : fichier local + stockage en ligne (si activé).
+async function persist() {
+  saveFile();
+  if (storeEnabled) {
+    try { await saveStore(); }
+    catch (e) { console.error("[stockage en ligne] écriture impossible :", e.message); }
+  }
+}
+
 // Supprime les doublons de chaque liste (garde le 1er, conserve l'ordre).
 // Renvoie true si au moins un doublon a été retiré.
 function dedupeAll() {
   let changed = false;
-  for (const key of ["common", "hard", "texts"]) {
+  for (const key of LIST_KEYS) {
     const seen = new Set(), out = [];
     for (const v of WORDS[key]) { if (!seen.has(v)) { seen.add(v); out.push(v); } }
     if (out.length !== WORDS[key].length) { WORDS[key] = out; changed = true; }
   }
   return changed;
 }
-loadWords();
-if (dedupeAll()) saveWords(); // nettoie d'éventuels doublons hérités au démarrage
 
 // Port/IP d'écoute :
 // - AlwaysData fournit ALWAYSDATA_HTTPD_PORT / ALWAYSDATA_HTTPD_IP
@@ -81,7 +133,7 @@ const server = http.createServer((req, res) => {
   if (urlPath === "/api/admin" && req.method === "POST") {
     let body = "";
     req.on("data", (c) => { body += c; if (body.length > 1e6) req.destroy(); });
-    req.on("end", () => {
+    req.on("end", async () => {
       let msg; try { msg = JSON.parse(body); } catch { return sendJson(res, 400, { error: "requête invalide" }); }
       if (msg.password !== ADMIN_PASSWORD) return sendJson(res, 403, { error: "mot de passe incorrect" });
 
@@ -135,7 +187,7 @@ const server = http.createServer((req, res) => {
       }
       // action "check" (connexion) : on renvoie juste les listes, sans message
 
-      if (changed) saveWords();
+      if (changed) await persist();
       return sendJson(res, 200, { lists: WORDS, message });
     });
     return;
@@ -168,15 +220,18 @@ const ELIM_GAP_MS = 3500;                // pause entre les manches
 const WORD_COURSE_COUNT = 40;            // nb de mots à taper en course (contenu « mots »)
 const PATATE_WORD_COUNT = 2;             // nb de mots à taper pour refiler la patate
 
-const MODES = ["course", "elimination", "patate", "hard"];
+const MODES = ["course", "elimination", "patate", "hard", "speed"];
 function normMode(m) { return MODES.includes(m) ? m : "course"; }
+// Modes « course » : tout le monde tape la même chose, le 1er à finir gagne.
+const RACE_MODES = ["course", "hard", "speed"];
+function isRace(m) { return RACE_MODES.includes(m); }
 
 // Réglages des modes : valeurs autorisées + valeurs par défaut
-const OPT_VALUES = { lives: [1, 2, 3], elimDur: [12, 18, 25], hardCount: [20, 30, 50] };
+const OPT_VALUES = { lives: [1, 2, 3], elimDur: [12, 18, 25], hardCount: [20, 30, 50], speedCount: [20, 40, 60] };
 // Contenu par défaut pour course / élimination : texte long pour la course, mots pour l'élimination.
 function defaultContentFor(mode) { return mode === "elimination" ? "mots" : "texte"; }
 function defaultOpts(mode) {
-  return { lives: 2, elimDur: 18, hardCount: 30, content: defaultContentFor(mode || "course"), textChoice: "rand" };
+  return { lives: 2, elimDur: 18, hardCount: 30, speedCount: 40, content: defaultContentFor(mode || "course"), textChoice: "rand" };
 }
 // Choisit l'index du texte à utiliser (un index précis choisi par l'hôte, ou aléatoire).
 function pickTextIndex(room) {
@@ -201,6 +256,20 @@ function broadcast(room, obj) {
   for (const p of room.players.values()) send(p.ws, obj);
 }
 
+/* ----- Chat du salon ----- */
+const CHAT_MAX = 60; // nb de messages gardés dans l'historique d'un salon
+function pushChat(room, entry) {
+  if (!room.chat) room.chat = [];
+  room.chat.push(entry);
+  if (room.chat.length > CHAT_MAX) room.chat.splice(0, room.chat.length - CHAT_MAX);
+}
+// Message « système » (arrivée / départ) : stocké dans l'historique + diffusé.
+function systemChat(room, text) {
+  const entry = { system: true, text };
+  pushChat(room, entry);
+  broadcast(room, { type: "chat", system: true, text });
+}
+
 function playerList(room) {
   return [...room.players.values()].map((p) => ({
     id: p.id, name: p.name, ready: p.ready, host: p.id === room.hostId,
@@ -220,7 +289,7 @@ function startCountdownThenPlay(room) {
   // les clients affichent 3-2-1 (3s) ; on lance ensuite la manche
   setTimeout(() => {
     if (!rooms.has(room.code)) return;
-    if (room.mode === "course" || room.mode === "hard") startCourse(room);
+    if (isRace(room.mode)) startCourse(room);
     else if (room.mode === "patate") startPatate(room);
     else startElimRound(room);
   }, 3200);
@@ -238,6 +307,11 @@ function startCourse(room) {
     room.seed = Math.floor(Math.random() * 1e9);
     const count = (room.opts && room.opts.hardCount) || 30;
     broadcast(room, { type: "start", mode: "hard", seed: room.seed, count });
+  } else if (room.mode === "speed") {
+    // course sur des mots simples sans accents
+    room.seed = Math.floor(Math.random() * 1e9);
+    const count = (room.opts && room.opts.speedCount) || 40;
+    broadcast(room, { type: "start", mode: "speed", seed: room.seed, count });
   } else if (room.opts && room.opts.content === "mots") {
     // course sur des mots courants
     room.seed = Math.floor(Math.random() * 1e9);
@@ -456,11 +530,11 @@ wss.on("connection", (ws) => {
         const mode = normMode(msg.mode);
         const r = {
           code, hostId: id, mode, opts: defaultOpts(mode),
-          state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]),
+          state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]), chat: [],
         };
         rooms.set(code, r);
         ws.player = player; ws.roomCode = code;
-        send(ws, { type: "joined", code, you: id, mode: r.mode, opts: r.opts, isHost: true, players: playerList(r) });
+        send(ws, { type: "joined", code, you: id, mode: r.mode, opts: r.opts, isHost: true, players: playerList(r), chat: r.chat });
         break;
       }
       case "join": {
@@ -472,8 +546,9 @@ wss.on("connection", (ws) => {
         const player = mkPlayer(id, msg.name, ws);
         r.players.set(id, player);
         ws.player = player; ws.roomCode = r.code;
-        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, opts: r.opts, isHost: false, players: playerList(r) });
+        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, opts: r.opts, isHost: false, players: playerList(r), chat: r.chat || [] });
         broadcast(r, { type: "players", players: playerList(r), mode: r.mode, opts: r.opts });
+        systemChat(r, `${player.name} a rejoint le salon`);
         break;
       }
       case "ready": {
@@ -516,6 +591,15 @@ wss.on("connection", (ws) => {
         if (room && ws.player) tryStart(room, ws.player.id);
         break;
       }
+      case "chat": {
+        // message de chat du salon : on nettoie, on borne, puis on diffuse à tous.
+        if (!room || !ws.player) return;
+        const text = (msg.text || "").toString().replace(/\s+/g, " ").trim().slice(0, 200);
+        if (!text) return;
+        pushChat(room, { name: ws.player.name, text });
+        broadcast(room, { type: "chat", name: ws.player.name, text });
+        break;
+      }
       case "progress": {
         if (!room || !ws.player || room.state !== "playing") return;
         const p = ws.player;
@@ -540,7 +624,7 @@ wss.on("connection", (ws) => {
         break;
       }
       case "finished": {
-        if (!room || !ws.player || (room.mode !== "course" && room.mode !== "hard") || room.state !== "playing") return;
+        if (!room || !ws.player || !isRace(room.mode) || room.state !== "playing") return;
         const p = ws.player;
         if (p.finished) return;
         p.finished = true;
@@ -588,6 +672,7 @@ function leave(ws) {
   if (!room) return;
   const wasHost = ws.player && room.hostId === ws.player.id;
   const leftId = ws.player ? ws.player.id : null;
+  const leftName = ws.player ? ws.player.name : null;
   if (ws.player) room.players.delete(ws.player.id);
   ws.player = null;
 
@@ -602,8 +687,9 @@ function leave(ws) {
 
   if (room.state === "lobby") {
     broadcast(room, { type: "players", players: playerList(room), mode: room.mode, opts: room.opts });
+    if (leftName) systemChat(room, `${leftName} a quitté le salon`);
   } else if (room.state === "playing") {
-    if (room.mode === "course" || room.mode === "hard") {
+    if (isRace(room.mode)) {
       const all = [...room.players.values()];
       if (all.length && all.every((x) => x.finished)) endCourse(room);
       else broadcast(room, { type: "update", players: raceState(room) });
@@ -629,7 +715,34 @@ function leave(ws) {
 process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
 process.on("unhandledRejection", (err) => console.error("[unhandledRejection]", err));
 
-server.listen(PORT, HOST, () => {
-  const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
-  console.log(`\n  tape_  ▸  http://${shown}:${PORT}\n  (Ctrl+C pour arrêter)\n`);
-});
+// Démarrage : on récupère les mots (fichier puis stockage en ligne s'il existe),
+// on nettoie les doublons, puis seulement on ouvre le serveur — ainsi les
+// joueurs reçoivent tout de suite les bonnes listes.
+async function init() {
+  loadFile(); // fichier local / valeurs par défaut de words.js
+  let fromStore = false, storeOk = false;
+  if (storeEnabled) {
+    try { fromStore = await loadStore(); storeOk = true; }
+    catch (e) { console.error("[stockage en ligne] lecture impossible :", e.message); }
+  }
+  const deduped = dedupeAll();
+  if (deduped) saveFile();
+  // 1er lancement avec un stockage vide → on y recopie les listes actuelles ;
+  // (sinon, si on vient de retirer des doublons, on pousse aussi la version nettoyée)
+  if (storeEnabled && storeOk && (!fromStore || deduped)) {
+    try { await saveStore(); }
+    catch (e) { console.error("[stockage en ligne] écriture impossible :", e.message); storeOk = false; }
+  }
+
+  server.listen(PORT, HOST, () => {
+    const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
+    let stockage;
+    if (!storeEnabled) stockage = "fichier local seulement";
+    else if (storeOk) stockage = "en ligne (Upstash) ✓";
+    else stockage = "⚠ Upstash configuré mais injoignable — vérifie les 2 clés";
+    console.log(`\n  tape_  ▸  http://${shown}:${PORT}`);
+    console.log(`  sauvegarde des mots : ${stockage}`);
+    console.log(`  (Ctrl+C pour arrêter)\n`);
+  });
+}
+init();

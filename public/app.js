@@ -376,6 +376,41 @@ $$("#hard-options .opt").forEach((b) =>
 );
 onEnter["solo-hard"] = () => { setupHard(); setTimeout(() => hardEngine.focus(), 30); };
 
+/* ============================================================
+   SOLO — SPEED (chrono, mots simples sans accents)
+   ============================================================ */
+const speedEngine = createEngine($("#speed-typing"));
+let speedDuration = 30, speedTimer = null, speedTick = null;
+
+function setupSpeed() {
+  const enough = Math.max(60, Math.round(speedDuration * 4));
+  speedEngine.load(generateSpeedWords(enough), { finite: false });
+  $("#speed-timer").textContent = speedDuration;
+  $("#speed-wpm").textContent = "0 mpm";
+  clearInterval(speedTick); clearTimeout(speedTimer);
+}
+speedEngine.on({
+  start() {
+    speedTick = setInterval(() => {
+      const s = speedEngine.stats();
+      $("#speed-timer").textContent = Math.max(0, speedDuration - Math.floor(s.elapsedMs / 1000));
+      $("#speed-wpm").textContent = s.wpm + " mpm";
+    }, 100);
+    speedTimer = setTimeout(() => { clearInterval(speedTick); speedEngine.forceFinish(); }, speedDuration * 1000);
+  },
+  progress(s) { $("#speed-wpm").textContent = s.wpm + " mpm"; },
+  finish(s) { clearInterval(speedTick); clearTimeout(speedTimer); showResult({ ...s, elapsedMs: speedDuration * 1000 }, "speed"); },
+});
+$$("#speed-options .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#speed-options .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    speedDuration = +b.dataset.dur;
+    setupSpeed(); speedEngine.focus();
+  })
+);
+onEnter["solo-speed"] = () => { setupSpeed(); setTimeout(() => speedEngine.focus(), 30); };
+
 /* ---------- Tab = recommencer (sur écrans solo) ---------- */
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Tab") return;
@@ -383,6 +418,7 @@ document.addEventListener("keydown", (e) => {
   else if (currentScreen === "solo-text") { e.preventDefault(); setupText(); textEngine.focus(); }
   else if (currentScreen === "solo-zen") { e.preventDefault(); setupZen(); zenEngine.focus(); }
   else if (currentScreen === "solo-hard") { e.preventDefault(); setupHard(); hardEngine.focus(); }
+  else if (currentScreen === "solo-speed") { e.preventDefault(); setupSpeed(); speedEngine.focus(); }
 });
 
 /* ============================================================
@@ -391,7 +427,7 @@ document.addEventListener("keydown", (e) => {
 let lastSoloMode = "solo-words";
 function showResult(s, label) {
   lastSoloMode = label === "texte" ? "solo-text" : label === "zen" ? "solo-zen"
-    : label === "difficile" ? "solo-hard" : "solo-words";
+    : label === "difficile" ? "solo-hard" : label === "speed" ? "solo-speed" : "solo-words";
   countUp($("#res-wpm"), s.wpm);
   countUp($("#res-acc"), s.accuracy);
   countUp($("#res-chars"), s.correctChars);
@@ -413,7 +449,7 @@ $("#screen-race").addEventListener("animationend", (e) => {
 
 let ws = null, wsReady = false;
 let me = { id: null, name: "" };
-let room = { code: null, mode: "course", isHost: false, players: [], opts: { lives: 2, elimDur: 18, hardCount: 30 } };
+let room = { code: null, mode: "course", isHost: false, players: [], opts: { lives: 2, elimDur: 18, hardCount: 30, speedCount: 40 } };
 
 // Réglages proposés selon le mode. Course et élimination ont en plus le choix
 // du « contenu » (texte long / mots courants) et, si texte, lequel.
@@ -422,6 +458,7 @@ function lobbyOptionGroups() {
   if (m === "patate") groups.push({ key: "lives", label: "vies", values: [1, 2, 3] });
   if (m === "elimination") groups.push({ key: "elimDur", label: "durée", values: [12, 18, 25], suffix: "s" });
   if (m === "hard") groups.push({ key: "hardCount", label: "mots", values: [20, 30, 50] });
+  if (m === "speed") groups.push({ key: "speedCount", label: "mots", values: [20, 40, 60] });
   if (m === "course" || m === "elimination") {
     groups.push({ key: "content", label: "contenu", values: [
       { v: "texte", txt: "texte long" }, { v: "mots", txt: "mots courants" },
@@ -436,11 +473,16 @@ let mpModePick = "course";
 let raceTick = null, lastSent = 0, roundLocalTimer = null, sentFinished = false, amEliminated = false;
 let patateHolder = null, patatePassed = false, patateWord = "", patateErrored = false;
 
+// Modes « course » : tout le monde tape la même chose, le 1er à finir gagne.
+// (course, difficile et speed partagent exactement la même mécanique d'affichage.)
+const isRaceMode = (m) => m === "course" || m === "hard" || m === "speed";
+
 const MODE_DESC = {
   course: "Tout le monde tape le même texte. Le premier à finir gagne. Barres de progression en direct.",
   elimination: "Manches de 18s. À chaque manche, le joueur le plus lent est éliminé. Le dernier survivant gagne.",
   patate: "Une bombe passe de joueur en joueur : tape les 2 mots pour la refiler. Une faute la fait exploser 1s plus tôt. Celui qui la tient quand elle explose est éliminé.",
   hard: "Comme la course, mais avec des mots difficiles et pleins d'accents. Le premier à finir gagne.",
+  speed: "Comme la course, mais avec des mots simples sans accents. Tape vite — le premier à finir gagne !",
 };
 
 function connect() {
@@ -654,10 +696,11 @@ function showCountdown(then) {
 function startCourseClient(cfg) {
   go("race");
   $("#race-bomb").classList.add("hidden");
-  $("#race-mode-label").textContent = cfg.mode === "hard" ? "difficile" : "course";
+  $("#race-mode-label").textContent = cfg.mode === "hard" ? "difficile" : cfg.mode === "speed" ? "speed" : "course";
   $("#race-info").textContent = "premier arrivé, premier servi";
   let text;
   if (cfg.mode === "hard") text = generateHardWords(cfg.count, cfg.seed);
+  else if (cfg.mode === "speed") text = generateSpeedWords(cfg.count, cfg.seed);
   else if (cfg.content === "mots") text = generateWords(cfg.count, cfg.seed);
   else text = TEXTS[cfg.textIndex];
   raceEngine.load(text, { finite: true });
@@ -761,7 +804,7 @@ raceEngine.on({
       }
       return;
     }
-    const pct = room.mode === "course" || room.mode === "hard";
+    const pct = isRaceMode(room.mode);
     $("#race-progress").textContent = pct ? s.progress + "%" : s.correctChars + " car.";
     $("#race-wpm").textContent = s.wpm + " mpm";
     const t = now();
@@ -771,7 +814,7 @@ raceEngine.on({
     }
   },
   finish(s) {
-    if ((room.mode === "course" || room.mode === "hard") && !sentFinished) {
+    if (isRaceMode(room.mode) && !sentFinished) {
       sentFinished = true;
       sendWs({ type: "finished", wpm: s.wpm, accuracy: s.accuracy, time: s.elapsedMs });
       $("#race-info").textContent = "terminé — en attente des autres…";
@@ -783,7 +826,7 @@ function startRaceTick() {
   raceTick = setInterval(() => {
     if (raceEngine.isFinished()) return;
     const s = raceEngine.stats();
-    $("#race-progress").textContent = (room.mode === "course" || room.mode === "hard" ? s.progress + "%" : s.correctChars + " car.");
+    $("#race-progress").textContent = (isRaceMode(room.mode) ? s.progress + "%" : s.correctChars + " car.");
     $("#race-wpm").textContent = s.wpm + " mpm";
   }, 150);
 }
@@ -795,9 +838,9 @@ function showMpResult(data) {
   const ol = $("#mpres-ranking");
   ol.innerHTML = "";
   const title = $("#mpres-title");
-  const titles = { course: "course terminée", hard: "difficile terminée", elimination: "élimination terminée", patate: "patate chaude terminée" };
+  const titles = { course: "course terminée", hard: "difficile terminée", speed: "speed terminée", elimination: "élimination terminée", patate: "patate chaude terminée" };
   title.textContent = titles[data.mode] || "résultats";
-  if (data.mode === "course" || data.mode === "hard") {
+  if (isRaceMode(data.mode)) {
     data.ranking.forEach((r, i) => {
       const li = document.createElement("li");
       const stat = r.finished ? `${r.wpm} mpm · ${r.accuracy}% · ${(r.time / 1000).toFixed(1)}s`
@@ -823,7 +866,11 @@ function handleServer(msg) {
       me.id = msg.you; me.name = getName();
       room = { code: msg.code, mode: msg.mode, isHost: msg.isHost, players: msg.players, opts: msg.opts || room.opts };
       amEliminated = false;
+      resetChat(msg.chat);
       renderLobby(); go("lobby");
+      break;
+    case "chat":
+      addChatMessage({ name: msg.name, text: msg.text, system: msg.system });
       break;
     case "players":
       if (msg.mode) room.mode = msg.mode;
@@ -844,6 +891,7 @@ function handleServer(msg) {
     case "start":
       if (msg.mode === "course") { amEliminated = false; startCourseClient({ mode: "course", content: msg.content, textIndex: msg.textIndex, seed: msg.seed, count: msg.count }); }
       else if (msg.mode === "hard") { amEliminated = false; startCourseClient({ mode: "hard", seed: msg.seed, count: msg.count }); }
+      else if (msg.mode === "speed") { amEliminated = false; startCourseClient({ mode: "speed", seed: msg.seed, count: msg.count }); }
       else if (msg.mode === "patate") { startPatateClient(); }
       else startElimClient(msg);
       break;
@@ -902,6 +950,7 @@ function escapeText(s) {
 function applyWordData(data) {
   if (Array.isArray(data.common) && data.common.length) { COMMON_WORDS.length = 0; COMMON_WORDS.push(...data.common); }
   if (Array.isArray(data.hard)   && data.hard.length)   { HARD_WORDS.length = 0;   HARD_WORDS.push(...data.hard); }
+  if (Array.isArray(data.speed)  && data.speed.length)  { SPEED_WORDS.length = 0;  SPEED_WORDS.push(...data.speed); }
   if (Array.isArray(data.texts)  && data.texts.length)  { TEXTS.length = 0;        TEXTS.push(...data.texts); }
 }
 
@@ -919,6 +968,7 @@ async function loadWordData() {
 function refreshCurrentSolo() {
   if (currentScreen === "solo-words") setupWords();
   else if (currentScreen === "solo-hard") setupHard();
+  else if (currentScreen === "solo-speed") setupSpeed();
   else if (currentScreen === "solo-zen") setupZen();
   else if (currentScreen === "solo-text") setupText();
 }
@@ -927,10 +977,11 @@ const adminOverlay = $("#admin-overlay");
 let adminPassword = "";                                  // mémorisé après connexion réussie
 let adminList = "common";                                // liste active dans le panneau
 let adminSearch = "";                                    // texte de recherche (filtre la liste)
-let adminData = { common: [], hard: [], texts: [] };     // dernières listes connues
+let adminData = { common: [], hard: [], speed: [], texts: [] };     // dernières listes connues
 const ADMIN_META = {
   common: { hint: "Mots du mode « mots courants » (aussi patate chaude et élimination). Tu peux en ajouter plusieurs séparés par des espaces.", ph: "ex : bonjour maison soleil" },
   hard:   { hint: "Mots du mode « difficile ». Plusieurs mots possibles, séparés par des espaces.", ph: "ex : anticonstitutionnellement" },
+  speed:  { hint: "Mots du mode « speed » : simples et SANS accent. Plusieurs possibles, séparés par des espaces.", ph: "ex : maison velo jardin" },
   texts:  { hint: "Textes du mode « texte ». Modifie un texte directement dans son cadre puis « enregistrer ».", ph: "Colle ici un nouveau texte complet…" },
 };
 
@@ -1088,6 +1139,81 @@ $$("#admin-tabs .opt").forEach((b) =>
     renderAdminList();
   })
 );
+
+/* ============================================================
+   NOUVEAUTÉS (patch notes)
+   ============================================================ */
+const notesOverlay = $("#notes-overlay");
+function renderNotes() {
+  const wrap = $("#notes-list");
+  wrap.innerHTML = "";
+  const list = (typeof PATCH_NOTES !== "undefined" && Array.isArray(PATCH_NOTES)) ? PATCH_NOTES : [];
+  if (!list.length) { wrap.innerHTML = '<p class="admin-empty">Aucune nouveauté pour l\'instant.</p>'; return; }
+  list.forEach((entry) => {
+    const block = document.createElement("div");
+    block.className = "notes-entry";
+    const head = document.createElement("div");
+    head.className = "notes-entry-head";
+    head.innerHTML = `<span class="notes-version">v${escapeText(String(entry.version || ""))}</span>` +
+      `<span class="notes-date">${escapeText(String(entry.date || ""))}</span>`;
+    const ul = document.createElement("ul");
+    ul.className = "notes-changes";
+    (entry.changes || []).forEach((c) => {
+      const li = document.createElement("li");
+      li.textContent = c; // textContent = pas d'injection HTML possible
+      ul.appendChild(li);
+    });
+    block.appendChild(head); block.appendChild(ul);
+    wrap.appendChild(block);
+  });
+}
+function openNotes() { renderNotes(); notesOverlay.classList.remove("hidden"); }
+function closeNotes() { notesOverlay.classList.add("hidden"); }
+$("#notes-open").addEventListener("click", openNotes);
+$("#notes-close").addEventListener("click", closeNotes);
+notesOverlay.addEventListener("click", (e) => { if (e.target === notesOverlay) closeNotes(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !notesOverlay.classList.contains("hidden")) closeNotes(); });
+
+/* ============================================================
+   CHAT DU SALON (multijoueur)
+   ============================================================ */
+const chatMessagesEl = $("#chat-messages");
+
+// Vide le chat et affiche un éventuel historique (reçu à l'arrivée dans le salon).
+function resetChat(history) {
+  chatMessagesEl.innerHTML = "";
+  if (Array.isArray(history) && history.length) {
+    history.forEach((m) => addChatMessage(m, false));
+  } else {
+    chatMessagesEl.innerHTML = '<p class="chat-empty">Dis bonjour 👋</p>';
+  }
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+// Ajoute un message au chat. `m` = { name, text, system }.
+function addChatMessage(m, scroll = true) {
+  const empty = chatMessagesEl.querySelector(".chat-empty");
+  if (empty) empty.remove();
+  const div = document.createElement("div");
+  if (m.system) {
+    div.className = "chat-msg system";
+    div.textContent = m.text;
+  } else {
+    const mine = m.name === me.name;
+    div.className = "chat-msg" + (mine ? " me" : "");
+    div.innerHTML = `<span class="chat-name">${escapeText(m.name)}</span><span class="chat-text"></span>`;
+    div.querySelector(".chat-text").textContent = m.text; // textContent = sûr
+  }
+  chatMessagesEl.appendChild(div);
+  if (scroll) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+$("#chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = $("#chat-input");
+  const text = (input.value || "").trim().slice(0, 200);
+  if (!text) return;
+  sendWs({ type: "chat", text });
+  input.value = "";
+});
 
 /* ---------- démarrage ---------- */
 loadWordData();

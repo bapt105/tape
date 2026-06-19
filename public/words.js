@@ -58,6 +58,26 @@ const HARD_WORDS = [
   "zoologique","sténographie","sphygmomanomètre","anticonformiste","circonlocution"
 ];
 
+// Mots « speed » : ultra simples, SANS accent, longueur variée (mode « speed »).
+// But : taper le plus vite possible sans se prendre les doigts dans les accents.
+const SPEED_WORDS = [
+  "chat","chien","maison","table","chaise","porte","livre","page","stylo","papier",
+  "sac","main","pied","jardin","arbre","plante","fleur","herbe","route","ville",
+  "village","pont","train","avion","bateau","moto","camion","gare","port","plage",
+  "sable","vague","montagne","colline","bois","champ","pomme","poire","banane","orange",
+  "fraise","cerise","raisin","citron","tomate","salade","carotte","oignon","pain","beurre",
+  "fromage","jambon","poulet","poisson","soupe","biscuit","chocolat","bonbon","sucre","poivre",
+  "lait","verre","tasse","assiette","fourchette","couteau","casserole","lampe","bureau","ordinateur",
+  "clavier","souris","portable","radio","musique","film","photo","image","dessin","couleur",
+  "rouge","bleu","vert","jaune","violet","blanc","noir","marron","grand","petit",
+  "mince","large","rond","rapide","lent","chaud","froid","facile","simple","propre",
+  "content","calme","gentil","docteur","facteur","boulanger","pompier","policier","chanteur","peintre",
+  "marin","pilote","soleil","lune","nuage","pluie","vent","neige","orage","jour",
+  "matin","heure","minute","semaine","lundi","mardi","mercredi","jeudi","vendredi","samedi",
+  "dimanche","copain","famille","cousin","enfant","bonjour","merci","ballon","jouet","carte",
+  "cadeau","vacances","voyage","valise","chemin","argent","banque","magasin"
+];
+
 // Textes pour le mode « Texte » (originaux, libres de droits)
 const TEXTS = [
   "Le matin, la ville s'éveille lentement sous une lumière douce. Les rues encore vides se remplissent peu à peu de pas pressés et de voix tranquilles. Quelque part, une fenêtre s'ouvre, et l'odeur du café se répand dans l'air frais du jour qui commence.",
@@ -105,8 +125,9 @@ function pickWords(list, count, seed) {
 }
 function generateWords(count, seed) { return pickWords(COMMON_WORDS, count, seed); }
 function generateHardWords(count, seed) { return pickWords(HARD_WORDS, count, seed); }
+function generateSpeedWords(count, seed) { return pickWords(SPEED_WORDS, count, seed); }
 
 // Expose pour le navigateur et pour Node (serveur).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { COMMON_WORDS, HARD_WORDS, TEXTS, TEXTS_COUNT, generateWords, generateHardWords, mulberry32 };
+  module.exports = { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, TEXTS_COUNT, generateWords, generateHardWords, generateSpeedWords, mulberry32 };
 }
