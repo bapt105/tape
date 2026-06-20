@@ -241,20 +241,36 @@ async function saveScoresStore() {
   await storeCommand(["SET", SCORES_STORE_KEY, JSON.stringify(SCORES)]);
 }
 
-// Sauvegarde « groupée » : on n'écrit pas à chaque partie (sinon on martèle
-// Upstash). On programme une écriture ~2,5 s après le 1er changement, qui
-// emporte tous les changements accumulés entre-temps.
-let scoresTimer = null;
+// Sauvegarde du classement — pensée pour NE JAMAIS perdre le classement, même
+// quand l'hébergeur (Render…) éteint puis rallume le serveur.
+//   1) le fichier local est réécrit tout de suite (durable, et pas cher) ;
+//   2) l'écriture EN LIGNE (Upstash) est « groupée » : on attend ~2,5 s pour
+//      emporter d'un coup plusieurs parties rapprochées, sans marteler Upstash ;
+//   3) un « drapeau » `scoresDirty` reste levé tant que l'écriture en ligne n'a
+//      pas réussi → si Upstash est momentanément injoignable, on RÉESSAIE
+//      (filet de sécurité périodique + sauvegarde à l'extinction du serveur).
+let scoresDirty = false;       // des changements pas encore sauvegardés EN LIGNE ?
+let scoresWriteTimer = null;   // écriture en ligne programmée (anti-matraquage)
+
 function persistScores() {
-  if (scoresTimer) return;
-  scoresTimer = setTimeout(async () => {
-    scoresTimer = null;
-    saveScoresFile();
-    if (storeEnabled) {
-      try { await saveScoresStore(); }
-      catch (e) { console.error("[classement en ligne] écriture impossible :", e.message); }
-    }
-  }, 2500);
+  saveScoresFile();            // (1) fichier local : immédiat
+  if (!storeEnabled) return;   // pas d'Upstash → rien de plus (mode local)
+  scoresDirty = true;          // (2) il y a du neuf à pousser en ligne
+  if (scoresWriteTimer) return;
+  scoresWriteTimer = setTimeout(flushScoresStore, 2500);
+}
+
+// Pousse le classement vers Upstash. Ne baisse le drapeau qu'en cas de SUCCÈS,
+// pour qu'un échec réseau soit automatiquement retenté plus tard.
+async function flushScoresStore() {
+  scoresWriteTimer = null;
+  if (!storeEnabled || !scoresDirty) return;
+  try {
+    await saveScoresStore();
+    scoresDirty = false;       // (3) succès → plus rien en attente
+  } catch (e) {
+    console.error("[classement en ligne] écriture impossible (sera retentée) :", e.message);
+  }
 }
 
 // Port/IP d'écoute :
@@ -907,6 +923,27 @@ function leave(ws) {
 process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
 process.on("unhandledRejection", (err) => console.error("[unhandledRejection]", err));
 
+// À l'EXTINCTION du serveur (Render envoie « SIGTERM » avant de couper la
+// machine ; en local, Ctrl+C envoie « SIGINT »), on sauvegarde le classement
+// UNE DERNIÈRE FOIS avant de quitter — ainsi aucune partie récente n'est perdue
+// au redémarrage. (Les mots, eux, sont déjà sauvegardés à chaque modif admin.)
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;            // évite les doubles appels
+  shuttingDown = true;
+  console.log(`\n  arrêt (${signal}) — sauvegarde du classement…`);
+  setTimeout(() => process.exit(0), 6000).unref(); // garde-fou : on quitte même si Upstash traîne
+  if (scoresWriteTimer) { clearTimeout(scoresWriteTimer); scoresWriteTimer = null; }
+  saveScoresFile();
+  if (storeEnabled && scoresDirty) {
+    try { await saveScoresStore(); scoresDirty = false; }
+    catch (e) { console.error("[classement] sauvegarde finale impossible :", e.message); }
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
 // Démarrage : on récupère les mots (fichier puis stockage en ligne s'il existe),
 // on nettoie les doublons, puis seulement on ouvre le serveur — ainsi les
 // joueurs reçoivent tout de suite les bonnes listes.
@@ -929,19 +966,35 @@ async function init() {
   // Classement : on charge le fichier local puis, s'il existe, le stockage en
   // ligne (qui fait foi). Comme pour les mots, l'en-ligne survit aux redémarrages.
   loadScoresFile();
+  let scoresStoreOk = false, scoresFromStore = false;
   if (storeEnabled) {
-    try { await loadScoresStore(); }
+    try { scoresFromStore = await loadScoresStore(); scoresStoreOk = true; }
     catch (e) { console.error("[classement en ligne] lecture impossible :", e.message); }
+  }
+  // Stockage en ligne encore vide mais on a déjà des scores en local → on les
+  // recopie en ligne, pour ne pas repartir de zéro à la 1re mise en ligne.
+  if (storeEnabled && scoresStoreOk && !scoresFromStore && Object.keys(SCORES.players).length) {
+    try { await saveScoresStore(); }
+    catch (e) { console.error("[classement en ligne] écriture initiale impossible :", e.message); }
+  }
+  const nbProfiles = Object.keys(SCORES.players).length;
+
+  // Filet de sécurité : si une écriture en ligne avait échoué (Upstash momentanément
+  // injoignable), on la retente régulièrement. `.unref()` : n'empêche pas de quitter.
+  if (storeEnabled) {
+    setInterval(() => { if (scoresDirty && !scoresWriteTimer) flushScoresStore(); }, 30000).unref();
   }
 
   server.listen(PORT, HOST, () => {
     const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
     let stockage;
     if (!storeEnabled) stockage = "fichier local seulement";
-    else if (storeOk) stockage = "en ligne (Upstash) ✓";
+    else if (storeOk && scoresStoreOk) stockage = "en ligne (Upstash) ✓";
     else stockage = "⚠ Upstash configuré mais injoignable — vérifie les 2 clés";
     console.log(`\n  tape_  ▸  http://${shown}:${PORT}`);
-    console.log(`  sauvegarde des mots : ${stockage}`);
+    console.log(`  sauvegarde mots + classement : ${stockage}`);
+    console.log(`  classement : ${nbProfiles} joueur(s) chargé(s)` +
+      (storeEnabled && scoresStoreOk ? " depuis Upstash" : " (fichier local)"));
     console.log(`  (Ctrl+C pour arrêter)\n`);
   });
 }
