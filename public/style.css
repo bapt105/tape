@@ -445,6 +445,9 @@ kbd {
 .lb-id-note { color: var(--muted); font-size: .78rem; }
 .lb-tabs { margin-bottom: 18px; }
 
+.lb-text-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.lb-text-filter .opt-select { max-width: 100%; }
+
 .lb-loading, .lb-empty { color: var(--muted); font-size: .88rem; padding: 14px 4px; line-height: 1.55; }
 
 /* --- Tableau du classement --- */

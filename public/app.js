@@ -276,6 +276,7 @@ const textEngine = createEngine($("#text-typing"));
 $("#text-typing").classList.add("text-mode");
 let textTick = null;
 let lastTextIdx = -1;
+let currentTextStr = ""; // le texte en cours (pour le classement par texte)
 
 function pickText() {
   let i; do { i = Math.floor(Math.random() * TEXTS.length); } while (i === lastTextIdx && TEXTS.length > 1);
@@ -283,7 +284,8 @@ function pickText() {
   return TEXTS[i];
 }
 function setupText() {
-  textEngine.load(pickText(), { finite: true });
+  currentTextStr = pickText();
+  textEngine.load(currentTextStr, { finite: true });
   $("#text-progress").textContent = "0%";
   $("#text-wpm").textContent = "0 mpm";
   clearInterval(textTick);
@@ -300,7 +302,7 @@ textEngine.on({
     $("#text-progress").textContent = s.progress + "%";
     $("#text-wpm").textContent = s.wpm + " mpm";
   },
-  finish(s) { clearInterval(textTick); showResult(s, "texte"); },
+  finish(s) { clearInterval(textTick); showResult(s, "texte", textExtra(currentTextStr)); },
 });
 $("#text-shuffle").addEventListener("click", () => { setupText(); textEngine.focus(); });
 onEnter["solo-text"] = () => { setupText(); setTimeout(() => textEngine.focus(), 30); };
@@ -425,7 +427,7 @@ document.addEventListener("keydown", (e) => {
    RÉSULTAT SOLO
    ============================================================ */
 let lastSoloMode = "solo-words";
-function showResult(s, label) {
+function showResult(s, label, extra) {
   lastSoloMode = label === "texte" ? "solo-text" : label === "zen" ? "solo-zen"
     : label === "difficile" ? "solo-hard" : label === "speed" ? "solo-speed" : "solo-words";
   countUp($("#res-wpm"), s.wpm);
@@ -434,7 +436,7 @@ function showResult(s, label) {
   $("#res-time").textContent = Math.round(s.elapsedMs / 1000);
   $("#res-mode").textContent = label;
   go("result");
-  renderResultSave(labelToMode(label), s); // proposer d'enregistrer au classement
+  renderResultSave(labelToMode(label), s, extra); // proposer d'enregistrer au classement
 }
 $("#res-again").addEventListener("click", () => go(lastSoloMode));
 
@@ -1240,6 +1242,21 @@ function labelToMode(label) {
     : "mots"; // "mots courants"
 }
 
+/* ----- Identité d'un texte (pour le classement par texte) -----
+   Chaque texte est identifié par une petite empreinte de son contenu : c'est
+   STABLE (le même texte → le même identifiant sur tous les appareils) et ça
+   reste juste même si l'admin réordonne les textes. Un texte modifié devient
+   un « nouveau » texte (nouvelle empreinte) — ce qui est logique. */
+function normText(s) { return (s || "").trim().replace(/\s+/g, " "); }
+function hashText(s) {
+  s = normText(s);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+function textPreviewOf(s) { s = normText(s); return s.length > 48 ? s.slice(0, 48) + "…" : s; }
+function textExtra(s) { return { textId: hashText(s), textPreview: textPreviewOf(s) }; }
+
 const isOffline = () => location.protocol === "file:";
 function currentPseudo() { return (localStorage.getItem("tape-name") || "").trim(); }
 function setPseudo(name) {
@@ -1251,22 +1268,24 @@ function setPseudo(name) {
 }
 
 /* ----- Envoi d'un score à la fin d'un solo ----- */
-async function submitScore(modeKey, s) {
+async function submitScore(modeKey, s, extra) {
   try {
+    const body = {
+      name: currentPseudo(), mode: modeKey,
+      wpm: s.wpm, accuracy: s.accuracy, chars: s.correctChars, timeMs: Math.round(s.elapsedMs),
+    };
+    if (extra && extra.textId) { body.textId = extra.textId; body.textPreview = extra.textPreview; }
     const res = await fetch("/api/score", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: currentPseudo(), mode: modeKey,
-        wpm: s.wpm, accuracy: s.accuracy, chars: s.correctChars, timeMs: Math.round(s.elapsedMs),
-      }),
+      body: JSON.stringify(body),
     });
     return await res.json();
   } catch { return null; }
 }
 
 // Affiche le bloc « enregistré au classement » sous le résultat solo.
-function renderResultSave(modeKey, s) {
+function renderResultSave(modeKey, s, extra) {
   const box = $("#result-save");
   if (!box) return;
   if (isOffline()) { box.innerHTML = '<span class="rs-note">classement indisponible hors-ligne</span>'; return; }
@@ -1282,18 +1301,18 @@ function renderResultSave(modeKey, s) {
     const save = () => {
       const n = setPseudo($("#rs-name").value);
       if (!n) { $("#rs-name").focus(); return; }
-      doSubmitScore(modeKey, s);
+      doSubmitScore(modeKey, s, extra);
     };
     $("#rs-save").addEventListener("click", save);
     $("#rs-name").addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
     return;
   }
-  doSubmitScore(modeKey, s);
+  doSubmitScore(modeKey, s, extra);
 }
-async function doSubmitScore(modeKey, s) {
+async function doSubmitScore(modeKey, s, extra) {
   const box = $("#result-save");
   box.innerHTML = '<span class="rs-note">enregistrement…</span>';
-  const r = await submitScore(modeKey, s);
+  const r = await submitScore(modeKey, s, extra);
   if (!r || !r.ok) { box.innerHTML = '<span class="rs-note err">classement injoignable — le serveur est-il lancé ?</span>'; return; }
   if (!r.recorded) { box.innerHTML = '<span class="rs-note">score trop court pour le classement</span>'; return; }
   const rankTxt = r.rank ? ` · <b>${r.rank}<sup>e</sup></b> sur ${r.total}` : "";
@@ -1349,7 +1368,22 @@ function offlineHtml() {
 }
 
 /* ----- État de l'écran classement ----- */
-let lbTab = "ranking", lbMode = "tous";
+let lbTab = "ranking", lbMode = "tous", lbTextId = ""; // lbTextId "" = tous les textes
+
+// Affiche (ou cache) le menu déroulant « texte », et le remplit avec les textes
+// actuels du jeu. Visible uniquement quand le mode « texte » est sélectionné.
+function renderTextFilter() {
+  const wrap = $("#lb-text-filter");
+  if (lbMode !== "texte") { wrap.classList.add("hidden"); return; }
+  wrap.classList.remove("hidden");
+  const sel = $("#lb-text-select");
+  sel.innerHTML = "";
+  sel.appendChild(new Option("tous les textes", "", lbTextId === "", lbTextId === ""));
+  TEXTS.forEach((t, i) => {
+    const id = hashText(t);
+    sel.appendChild(new Option(`#${i + 1} — ${textPreviewOf(t)}`, id, lbTextId === id, lbTextId === id));
+  });
+}
 
 onEnter["leaderboard"] = () => {
   $("#lb-name").value = currentPseudo();
@@ -1368,15 +1402,20 @@ function showLbTab(tab) {
 
 /* ----- Vue : classement global ----- */
 async function renderLeaderboard() {
+  renderTextFilter();
   const view = $("#lb-table");
   if (isOffline()) { view.innerHTML = offlineHtml(); return; }
   view.innerHTML = '<p class="lb-loading">chargement…</p>';
+  let url = `/api/leaderboard?mode=${encodeURIComponent(lbMode)}`;
+  if (lbMode === "texte" && lbTextId) url += `&text=${encodeURIComponent(lbTextId)}`;
   let data;
-  try { data = await (await fetch(`/api/leaderboard?mode=${encodeURIComponent(lbMode)}`)).json(); }
+  try { data = await (await fetch(url)).json(); }
   catch { view.innerHTML = '<p class="lb-empty">classement injoignable — le serveur est-il lancé ?</p>'; return; }
   const players = data.players || [];
   if (!players.length) {
-    view.innerHTML = '<p class="lb-empty">Aucun score pour l\'instant. Joue une partie solo pour ouvrir le classement !</p>';
+    view.innerHTML = (lbMode === "texte" && lbTextId)
+      ? '<p class="lb-empty">Aucun score sur ce texte pour l\'instant — sois le premier à le taper !</p>'
+      : '<p class="lb-empty">Aucun score pour l\'instant. Joue une partie solo pour ouvrir le classement !</p>';
     return;
   }
   const me = currentPseudo();
@@ -1496,9 +1535,14 @@ $$("#lb-mode-filter .opt").forEach((b) =>
     $$("#lb-mode-filter .opt").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     lbMode = b.dataset.lbmode;
+    lbTextId = ""; // en changeant de mode, on repart sur « tous les textes »
     renderLeaderboard();
   })
 );
+$("#lb-text-select").addEventListener("change", (e) => {
+  lbTextId = e.target.value;
+  renderLeaderboard();
+});
 
 /* ---------- démarrage ---------- */
 loadWordData();

@@ -25,6 +25,7 @@ const PATCH_NOTES = [
       "Nouvel écran « mon profil » : meilleur score, vitesse et précision moyennes, parties jouées, caractères tapés, temps total…",
       "Des courbes de progression pour suivre ton évolution (vitesse et précision sur tes dernières parties).",
       "Le classement se filtre par mode (mots, texte, zen, difficile, speed) et se conserve en ligne, comme les mots.",
+      "Mode « texte » : un classement SÉPARÉ par texte (les textes n'ont pas tous la même longueur) — choisis « tous les textes » ou un texte précis.",
     ],
   },
   {

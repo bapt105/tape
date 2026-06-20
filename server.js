@@ -138,19 +138,23 @@ function emptyProfile(name) {
     count: 0, sumWpm: 0, sumAcc: 0, sumChars: 0, sumTimeMs: 0,
     bestWpm: 0, bestMode: null,
     modes: {},   // mode -> { count, sumWpm, sumAcc, bestWpm }
+    texts: {},   // textId -> { count, sumWpm, sumAcc, bestWpm, preview }  (mode « texte » : un classement par texte)
     runs: [],    // { t, mode, wpm, acc, chars, timeMs }
   };
 }
 
 // Enregistre une partie terminée. Renvoie le profil mis à jour (ou null si
-// la partie est trop courte/invalide pour compter).
-function recordScore({ name, mode, wpm, acc, chars, timeMs }) {
+// la partie est trop courte/invalide pour compter). `textId`/`textPreview` ne
+// servent qu'au mode « texte » (pour un classement séparé par texte).
+function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview }) {
   if (!SCORE_MODES.includes(mode)) return null;
   wpm = clampNum(wpm, 0, 400);
   acc = clampNum(acc, 0, 100);
   chars = clampNum(chars, 0, 100000);
   timeMs = clampNum(timeMs, 0, 3600000);
   if (wpm < 1 || chars < 1) return null; // rien tapé → on n'enregistre pas
+  textId = (textId || "").toString().slice(0, 40);
+  textPreview = (textPreview || "").toString().slice(0, 80);
 
   const key = cleanName(name);
   let p = SCORES.players[key];
@@ -173,6 +177,16 @@ function recordScore({ name, mode, wpm, acc, chars, timeMs }) {
   if (!m) { m = { count: 0, sumWpm: 0, sumAcc: 0, bestWpm: 0 }; p.modes[mode] = m; }
   m.count++; m.sumWpm += wpm; m.sumAcc += acc; if (wpm > m.bestWpm) m.bestWpm = wpm;
 
+  // Mode « texte » : on tient aussi un mini-bilan PAR texte (chaque texte a sa
+  // propre longueur, donc son propre classement, pour une comparaison juste).
+  if (mode === "texte" && textId) {
+    if (!p.texts) p.texts = {};
+    let tx = p.texts[textId];
+    if (!tx) { tx = { count: 0, sumWpm: 0, sumAcc: 0, bestWpm: 0, preview: "" }; p.texts[textId] = tx; }
+    tx.count++; tx.sumWpm += wpm; tx.sumAcc += acc; if (wpm > tx.bestWpm) tx.bestWpm = wpm;
+    if (textPreview) tx.preview = textPreview;
+  }
+
   p.runs.push({ t: Date.now(), mode, wpm, acc, chars, timeMs });
   if (p.runs.length > RUNS_KEPT) p.runs.splice(0, p.runs.length - RUNS_KEPT);
 
@@ -180,27 +194,28 @@ function recordScore({ name, mode, wpm, acc, chars, timeMs }) {
   return p;
 }
 
-// Construit le tableau du classement, trié (record décroissant). `mode` peut
-// être "tous" (record toutes catégories) ou un mode précis.
-function leaderboard(mode) {
+// Construit le tableau du classement, trié (record décroissant).
+//   mode   : "tous" (record toutes catégories) ou un mode précis ;
+//   textId : si fourni avec mode "texte", classement d'UN texte précis.
+function leaderboard(mode, textId) {
   const list = [];
   for (const p of Object.values(SCORES.players)) {
+    let src = null;
     if (mode === "tous") {
-      if (p.count <= 0) continue;
-      list.push({
-        name: p.name, bestWpm: p.bestWpm, bestMode: p.bestMode,
-        avgWpm: Math.round(p.sumWpm / p.count), avgAcc: Math.round(p.sumAcc / p.count),
-        count: p.count,
-      });
+      if (p.count > 0) src = { bestWpm: p.bestWpm, bestMode: p.bestMode, sumWpm: p.sumWpm, sumAcc: p.sumAcc, count: p.count };
+    } else if (mode === "texte" && textId) {
+      const tx = p.texts && p.texts[textId];
+      if (tx && tx.count > 0) src = { bestWpm: tx.bestWpm, bestMode: "texte", sumWpm: tx.sumWpm, sumAcc: tx.sumAcc, count: tx.count };
     } else {
       const m = p.modes[mode];
-      if (!m || m.count <= 0) continue;
-      list.push({
-        name: p.name, bestWpm: m.bestWpm, bestMode: mode,
-        avgWpm: Math.round(m.sumWpm / m.count), avgAcc: Math.round(m.sumAcc / m.count),
-        count: m.count,
-      });
+      if (m && m.count > 0) src = { bestWpm: m.bestWpm, bestMode: mode, sumWpm: m.sumWpm, sumAcc: m.sumAcc, count: m.count };
     }
+    if (!src) continue;
+    list.push({
+      name: p.name, bestWpm: src.bestWpm, bestMode: src.bestMode,
+      avgWpm: Math.round(src.sumWpm / src.count), avgAcc: Math.round(src.sumAcc / src.count),
+      count: src.count,
+    });
   }
   list.sort((a, b) => (b.bestWpm - a.bestWpm) || (b.avgWpm - a.avgWpm) || (b.count - a.count));
   return list;
@@ -370,12 +385,18 @@ const server = http.createServer((req, res) => {
   }
 
   /* ---------- API : classement ---------- */
-  // Le tableau du classement (trié), filtrable par mode (?mode=tous|mots|…).
+  // Le tableau du classement (trié), filtrable par mode (?mode=tous|mots|…) et,
+  // pour le mode « texte », par texte précis (?text=<identifiant>).
   if (urlPath === "/api/leaderboard" && req.method === "GET") {
-    let mode = "tous";
-    try { mode = new URL(req.url, "http://x").searchParams.get("mode") || "tous"; } catch {}
+    let mode = "tous", textId = "";
+    try {
+      const sp = new URL(req.url, "http://x").searchParams;
+      mode = sp.get("mode") || "tous";
+      textId = (sp.get("text") || "").slice(0, 40);
+    } catch {}
     if (mode !== "tous" && !SCORE_MODES.includes(mode)) mode = "tous";
-    return sendJson(res, 200, { mode, players: leaderboard(mode) });
+    if (mode !== "texte") textId = "";
+    return sendJson(res, 200, { mode, text: textId || null, players: leaderboard(mode, textId) });
   }
   // Le profil détaillé d'un joueur (stats + historique pour les courbes).
   if (urlPath === "/api/profile" && req.method === "GET") {
@@ -393,6 +414,7 @@ const server = http.createServer((req, res) => {
       const p = recordScore({
         name: msg.name, mode: msg.mode,
         wpm: msg.wpm, acc: msg.accuracy, chars: msg.chars, timeMs: msg.timeMs,
+        textId: msg.textId, textPreview: msg.textPreview,
       });
       if (!p) return sendJson(res, 200, { ok: true, recorded: false });
       const { rank, total } = rankOf(p.name);
