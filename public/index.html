@@ -234,11 +234,19 @@
               <button class="opt" data-mpmode="speed">speed</button>
             </div>
             <p class="mode-desc" id="mp-mode-desc"></p>
+            <div class="mp-vis-row">
+              <span class="opt-label">visibilité</span>
+              <div class="mode-pick" id="mp-visibility">
+                <button class="opt active" data-vis="public">public</button>
+                <button class="opt" data-vis="prive">privé</button>
+              </div>
+            </div>
+            <p class="vis-note" id="mp-vis-note">visible par tous dans la liste des salons publics.</p>
             <button class="btn" id="mp-create">créer</button>
           </div>
 
           <div class="multi-block">
-            <h3>rejoindre</h3>
+            <h3>rejoindre avec un code</h3>
             <label class="field">
               <span>code du salon</span>
               <input type="text" id="mp-code" maxlength="4" placeholder="ABCD" autocomplete="off" />
@@ -247,6 +255,15 @@
           </div>
         </div>
         <p class="mp-error" id="mp-error"></p>
+
+        <!-- Fil des salons publics -->
+        <div class="public-rooms">
+          <div class="public-rooms-head">
+            <h3>salons publics</h3>
+            <button class="link" id="mp-refresh" title="Rafraîchir la liste">↻ rafraîchir</button>
+          </div>
+          <div class="public-list" id="public-list"></div>
+        </div>
       </div>
     </section>
 
@@ -255,6 +272,7 @@
       <h2 class="title-sm">salon</h2>
       <div class="lobby-code">code&nbsp;: <b id="lobby-code">—</b>
         <button class="link" id="lobby-copy" title="Copier">copier</button>
+        <span class="lobby-vis" id="lobby-vis"></span>
       </div>
       <div class="lobby-mode-row">
         <span class="opt-label">mode</span>

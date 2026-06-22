@@ -15,6 +15,8 @@ let currentScreen = "home";
 
 function go(name) {
   if (!screens[name]) return;
+  // en quittant l'écran multijoueur, on arrête de sonder les salons publics
+  if (currentScreen === "multi-home" && name !== "multi-home" && typeof stopPublicPolling === "function") stopPublicPolling();
   Object.values(screens).forEach((s) => s.classList.remove("active"));
   screens[name].classList.add("active");
   currentScreen = name;
@@ -475,6 +477,7 @@ function lobbyOptionGroups() {
 let mpModePick = "course";
 let raceTick = null, lastSent = 0, roundLocalTimer = null, sentFinished = false, amEliminated = false;
 let patateHolder = null, patatePassed = false, patateWord = "", patateErrored = false;
+let raceScoreInfo = null; // { modeKey, extra } pour enregistrer le score multi au classement
 
 // Modes « course » : tout le monde tape la même chose, le 1er à finir gagne.
 // (course, difficile et speed partagent exactement la même mécanique d'affichage.)
@@ -503,6 +506,7 @@ function connect() {
     wsReady = true;
     status.textContent = "connecté au serveur";
     status.className = "conn-status ok";
+    if (currentScreen === "multi-home") requestPublicRooms(); // charge le fil dès la connexion
   });
   ws.addEventListener("close", () => {
     wsReady = false;
@@ -518,12 +522,14 @@ function connect() {
 function sendWs(obj) { if (ws && wsReady) ws.send(JSON.stringify(obj)); }
 
 /* ----- Écran d'accueil multi ----- */
+let mpPublic = true; // à la création : salon public (listé) ou privé (sur code)
 onEnter["multi-home"] = () => {
   if (!ws) connect();
   $("#mp-error").textContent = "";
   $("#mp-mode-desc").textContent = MODE_DESC[mpModePick];
   const savedName = localStorage.getItem("tape-name");
   if (savedName) $("#mp-name").value = savedName;
+  startPublicPolling(); // demande régulièrement la liste des salons publics
 };
 $$("#mp-mode-pick .opt").forEach((b) =>
   b.addEventListener("click", () => {
@@ -533,6 +539,17 @@ $$("#mp-mode-pick .opt").forEach((b) =>
     $("#mp-mode-desc").textContent = MODE_DESC[mpModePick];
   })
 );
+// Choix public / privé à la création
+$$("#mp-visibility .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#mp-visibility .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    mpPublic = b.dataset.vis === "public";
+    $("#mp-vis-note").textContent = mpPublic
+      ? "visible par tous dans la liste des salons publics."
+      : "privé : rejoignable uniquement avec le code à 4 lettres.";
+  })
+);
 function getName() {
   const n = ($("#mp-name").value || "").trim().slice(0, 14) || "joueur";
   localStorage.setItem("tape-name", n);
@@ -540,8 +557,44 @@ function getName() {
 }
 $("#mp-create").addEventListener("click", () => {
   if (!wsReady) { $("#mp-error").textContent = "Pas de connexion au serveur."; return; }
-  sendWs({ type: "create", name: getName(), mode: mpModePick });
+  sendWs({ type: "create", name: getName(), mode: mpModePick, public: mpPublic });
 });
+
+/* ----- Fil des salons publics ----- */
+let publicPollTimer = null;
+function requestPublicRooms() { sendWs({ type: "listPublic" }); }
+function startPublicPolling() {
+  requestPublicRooms();
+  clearInterval(publicPollTimer);
+  publicPollTimer = setInterval(requestPublicRooms, 3000);
+}
+function stopPublicPolling() { clearInterval(publicPollTimer); publicPollTimer = null; }
+
+const MP_MODE_NAMES = { course: "course", elimination: "élimination", patate: "patate chaude", hard: "difficile", speed: "speed" };
+function renderPublicRooms(list) {
+  const wrap = $("#public-list");
+  if (!wrap) return;
+  if (!list || !list.length) {
+    wrap.innerHTML = '<p class="public-empty">Aucun salon public ouvert. Crée-en un — il apparaîtra ici pour les autres !</p>';
+    return;
+  }
+  wrap.innerHTML = "";
+  list.forEach((r) => {
+    const row = document.createElement("div");
+    row.className = "public-room";
+    row.innerHTML = `<div class="pr-info">
+        <span class="pr-host">${escapeText(r.host)}</span>
+        <span class="pr-meta">${MP_MODE_NAMES[r.mode] || r.mode} · ${r.count}/8 joueur(s)</span>
+      </div>
+      <button class="btn pr-join">rejoindre</button>`;
+    row.querySelector(".pr-join").addEventListener("click", () => {
+      if (!wsReady) { $("#mp-error").textContent = "Pas de connexion au serveur."; return; }
+      sendWs({ type: "join", code: r.code, name: getName() });
+    });
+    wrap.appendChild(row);
+  });
+}
+$("#mp-refresh").addEventListener("click", requestPublicRooms);
 $("#mp-join").addEventListener("click", () => {
   if (!wsReady) { $("#mp-error").textContent = "Pas de connexion au serveur."; return; }
   const code = ($("#mp-code").value || "").trim().toUpperCase();
@@ -605,6 +658,11 @@ function renderLobbyOpts() {
 
 function renderLobby() {
   $("#lobby-code").textContent = room.code;
+  const visEl = $("#lobby-vis");
+  if (visEl) {
+    visEl.textContent = room.isPublic ? "● public" : "● privé";
+    visEl.classList.toggle("is-public", !!room.isPublic);
+  }
   // sélecteur de mode : bouton actif = mode courant ; cliquable seulement par l'hôte
   $$("#lobby-mode-pick .opt").forEach((b) => {
     b.classList.toggle("active", b.dataset.mpmode === room.mode);
@@ -706,6 +764,12 @@ function startCourseClient(cfg) {
   else if (cfg.mode === "speed") text = generateSpeedWords(cfg.count, cfg.seed);
   else if (cfg.content === "mots") text = generateWords(cfg.count, cfg.seed);
   else text = TEXTS[cfg.textIndex];
+  // À la fin, on enregistrera ce score au classement (comme en solo). Pour une
+  // course sur un texte, on garde aussi son identité (classement par texte).
+  if (cfg.mode === "hard") raceScoreInfo = { modeKey: "difficile", extra: null };
+  else if (cfg.mode === "speed") raceScoreInfo = { modeKey: "speed", extra: null };
+  else if (cfg.content === "mots") raceScoreInfo = { modeKey: "mots", extra: null };
+  else raceScoreInfo = { modeKey: "texte", extra: textExtra(text) };
   raceEngine.load(text, { finite: true });
   raceEngine.setSpectator(false);
   raceEngine.setBlur(true);
@@ -718,6 +782,7 @@ function startCourseClient(cfg) {
 /* ----- Patate chaude ----- */
 function startPatateClient() {
   go("race");
+  raceScoreInfo = null; // la patate chaude ne compte pas au classement
   $("#race-bomb").classList.add("hidden"); // patate chaude : on ne montre pas le temps restant
   $("#race-mode-label").textContent = "patate chaude";
   $("#race-info").textContent = "préparez-vous…";
@@ -755,6 +820,7 @@ function onPotato(msg) {
 function startElimClient(msg) {
   const { duration, round } = msg;
   go("race");
+  raceScoreInfo = null; // l'élimination ne compte pas au classement (parties partielles)
   $("#race-mode-label").textContent = "élimination";
   // contenu : texte long (tout le monde le même) ou mots courants (via graine)
   const text = msg.content === "texte" ? TEXTS[msg.textIndex] : generateWords(msg.count, msg.seed);
@@ -821,6 +887,10 @@ raceEngine.on({
       sentFinished = true;
       sendWs({ type: "finished", wpm: s.wpm, accuracy: s.accuracy, time: s.elapsedMs });
       $("#race-info").textContent = "terminé — en attente des autres…";
+      // enregistre aussi ce score au classement (mode course/difficile/speed)
+      if (raceScoreInfo && !isOffline() && currentPseudo()) {
+        submitScore(raceScoreInfo.modeKey, s, raceScoreInfo.extra);
+      }
     }
   },
 });
@@ -867,10 +937,13 @@ function handleServer(msg) {
   switch (msg.type) {
     case "joined":
       me.id = msg.you; me.name = getName();
-      room = { code: msg.code, mode: msg.mode, isHost: msg.isHost, players: msg.players, opts: msg.opts || room.opts };
+      room = { code: msg.code, mode: msg.mode, isHost: msg.isHost, isPublic: msg.isPublic, players: msg.players, opts: msg.opts || room.opts };
       amEliminated = false;
       resetChat(msg.chat);
       renderLobby(); go("lobby");
+      break;
+    case "publicRooms":
+      renderPublicRooms(msg.rooms);
       break;
     case "chat":
       addChatMessage({ name: msg.name, text: msg.text, system: msg.system });
@@ -884,6 +957,7 @@ function handleServer(msg) {
     case "lobby": // après une revanche
       room.mode = msg.mode; room.players = msg.players;
       if (msg.opts) room.opts = msg.opts;
+      if (typeof msg.isPublic === "boolean") room.isPublic = msg.isPublic;
       room.isHost = !!(room.players.find((p) => p.id === me.id)?.host);
       amEliminated = false;
       renderLobby(); go("lobby");

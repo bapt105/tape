@@ -26,6 +26,8 @@ const PATCH_NOTES = [
       "Des courbes de progression pour suivre ton évolution (vitesse et précision sur tes dernières parties).",
       "Le classement se filtre par mode (mots, texte, zen, difficile, speed) et se conserve en ligne, comme les mots.",
       "Mode « texte » : un classement SÉPARÉ par texte (les textes n'ont pas tous la même longueur) — choisis « tous les textes » ou un texte précis.",
+      "Les parties multijoueur (course, difficile, speed) comptent aussi pour le classement.",
+      "Nouveau : des SALONS PUBLICS — choisis « public » à la création et ton salon apparaît dans une liste où tout le monde peut te rejoindre en un clic (ou reste « privé » sur code).",
     ],
   },
   {

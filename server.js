@@ -506,6 +506,19 @@ function playerList(room) {
     eliminated: p.eliminated,
   }));
 }
+// Liste des salons PUBLICS encore ouverts (dans le hall, pas pleins) — pour le
+// « fil » de salons publics affiché sur l'écran multijoueur.
+function publicRoomList() {
+  const out = [];
+  for (const r of rooms.values()) {
+    if (!r.isPublic || r.state !== "lobby" || r.players.size >= 8) continue;
+    const host = r.players.get(r.hostId);
+    out.push({ code: r.code, mode: r.mode, count: r.players.size, host: host ? host.name : "?" });
+  }
+  // les salons les plus remplis d'abord (plus proches de pouvoir démarrer)
+  out.sort((a, b) => (b.count - a.count) || (a.code < b.code ? -1 : 1));
+  return out.slice(0, 40);
+}
 function raceState(room) {
   return [...room.players.values()].map((p) => ({
     id: p.id, name: p.name, progress: p.progress, wpm: p.wpm,
@@ -760,11 +773,12 @@ wss.on("connection", (ws) => {
         const mode = normMode(msg.mode);
         const r = {
           code, hostId: id, mode, opts: defaultOpts(mode),
+          isPublic: msg.public !== false, // salon listé dans le fil public (par défaut oui)
           state: "lobby", round: 0, elimOrder: [], players: new Map([[id, player]]), chat: [],
         };
         rooms.set(code, r);
         ws.player = player; ws.roomCode = code;
-        send(ws, { type: "joined", code, you: id, mode: r.mode, opts: r.opts, isHost: true, players: playerList(r), chat: r.chat });
+        send(ws, { type: "joined", code, you: id, mode: r.mode, opts: r.opts, isHost: true, isPublic: r.isPublic, players: playerList(r), chat: r.chat });
         break;
       }
       case "join": {
@@ -776,9 +790,14 @@ wss.on("connection", (ws) => {
         const player = mkPlayer(id, msg.name, ws);
         r.players.set(id, player);
         ws.player = player; ws.roomCode = r.code;
-        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, opts: r.opts, isHost: false, players: playerList(r), chat: r.chat || [] });
+        send(ws, { type: "joined", code: r.code, you: id, mode: r.mode, opts: r.opts, isHost: false, isPublic: r.isPublic, players: playerList(r), chat: r.chat || [] });
         broadcast(r, { type: "players", players: playerList(r), mode: r.mode, opts: r.opts });
         systemChat(r, `${player.name} a rejoint le salon`);
+        break;
+      }
+      case "listPublic": {
+        // l'écran multijoueur demande la liste des salons publics (le « fil »)
+        send(ws, { type: "publicRooms", rooms: publicRoomList() });
         break;
       }
       case "ready": {
@@ -873,7 +892,7 @@ wss.on("connection", (ws) => {
       case "rematch": {
         if (!room) return;
         resetRoom(room);
-        broadcast(room, { type: "lobby", mode: room.mode, opts: room.opts, players: playerList(room) });
+        broadcast(room, { type: "lobby", mode: room.mode, opts: room.opts, isPublic: room.isPublic, players: playerList(room) });
         break;
       }
       case "leave": {
