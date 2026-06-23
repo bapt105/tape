@@ -28,6 +28,8 @@ const PATCH_NOTES = [
       "Mode « texte » : un classement SÉPARÉ par texte (les textes n'ont pas tous la même longueur) — choisis « tous les textes » ou un texte précis.",
       "Les parties multijoueur (course, difficile, speed) comptent aussi pour le classement.",
       "Nouveau : des SALONS PUBLICS — choisis « public » à la création et ton salon apparaît dans une liste où tout le monde peut te rejoindre en un clic (ou reste « privé » sur code).",
+      "Anti-triche en course : arriver au bout en tapant n'importe quoi ne fait plus gagner — il faut vraiment avoir tapé le texte (sinon l'arrivée est « non valide »).",
+      "À l'import d'un texte (admin), les apostrophes « courbes » deviennent des apostrophes simples ', les « … » deviennent ... et les guillemets/tirets sont uniformisés — pour que tout reste facile à taper.",
     ],
   },
   {

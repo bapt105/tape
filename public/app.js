@@ -482,6 +482,9 @@ let raceScoreInfo = null; // { modeKey, extra } pour enregistrer le score multi 
 // Modes « course » : tout le monde tape la même chose, le 1er à finir gagne.
 // (course, difficile et speed partagent exactement la même mécanique d'affichage.)
 const isRaceMode = (m) => m === "course" || m === "hard" || m === "speed";
+// Pour qu'une arrivée « compte » (gagner + classement) : il faut avoir vraiment
+// tapé le texte (mêmes seuils que le serveur).
+const MIN_FINISH_PROGRESS = 50, MIN_FINISH_ACCURACY = 50;
 
 const MODE_DESC = {
   course: "Tout le monde tape le même texte. Le premier à finir gagne. Barres de progression en direct.",
@@ -885,10 +888,15 @@ raceEngine.on({
   finish(s) {
     if (isRaceMode(room.mode) && !sentFinished) {
       sentFinished = true;
-      sendWs({ type: "finished", wpm: s.wpm, accuracy: s.accuracy, time: s.elapsedMs });
-      $("#race-info").textContent = "terminé — en attente des autres…";
-      // enregistre aussi ce score au classement (mode course/difficile/speed)
-      if (raceScoreInfo && !isOffline() && currentPseudo()) {
+      // on transmet aussi l'avancement réel : le serveur s'en sert pour vérifier
+      // que l'arrivée est « vraie » (pas du n'importe quoi tapé pour finir vite).
+      sendWs({ type: "finished", wpm: s.wpm, accuracy: s.accuracy, time: s.elapsedMs, progress: s.progress });
+      const valid = s.accuracy >= MIN_FINISH_ACCURACY && s.progress >= MIN_FINISH_PROGRESS;
+      $("#race-info").textContent = valid
+        ? "terminé — en attente des autres…"
+        : "arrivée non valide (trop de fautes) — ça ne compte pas";
+      // n'enregistre au classement QUE si l'arrivée est valide (pas de score poubelle)
+      if (valid && raceScoreInfo && !isOffline() && currentPseudo()) {
         submitScore(raceScoreInfo.modeKey, s, raceScoreInfo.extra);
       }
     }
@@ -917,6 +925,7 @@ function showMpResult(data) {
     data.ranking.forEach((r, i) => {
       const li = document.createElement("li");
       const stat = r.finished ? `${r.wpm} mpm · ${r.accuracy}% · ${(r.time / 1000).toFixed(1)}s`
+                  : r.invalid ? `non valide · trop de fautes (${r.progress}%)`
                               : `abandon (${r.progress}%)`;
       li.innerHTML = `<span class="rank">${i + 1}</span><span class="rname">${escapeText(r.name)}</span><span class="rstat">${stat}</span>`;
       ol.appendChild(li);

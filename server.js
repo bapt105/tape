@@ -85,6 +85,37 @@ async function persist() {
   }
 }
 
+// Uniformise la typographie d'un texte importé, pour qu'il soit FACILE à taper
+// au clavier (sinon les caractères « jolis » de Word/web sont impossibles à
+// reproduire) :
+//   - toutes les variantes d'apostrophe / guillemet simple  →  apostrophe droite '
+//   - les points de suspension « … »                         →  trois points ...
+//   - les guillemets doubles « courbes » “ ” „              →  guillemet droit "
+//   - tirets longs — –                                       →  trait d'union -
+//   - espace insécable                                       →  espace normal
+function normalizeTypography(s) {
+  return (s || "").toString()
+    .replace(/[‘’‚‛′ʼ´`]/g, "'") // ' ' ‚ ‛ ′ ʼ ´ ` → '
+    .replace(/[“”„″]/g, '"')                          // " " „ ″ → "
+    .replace(/…/g, "...")                                            // … → ...
+    .replace(/[–—]/g, "-")                                      // – — → -
+    .replace(/ /g, " ");                                             // espace insécable → espace
+}
+// Applique la normalisation à TOUTES les listes (mots + textes). Renvoie true
+// si au moins une entrée a changé. Sert au démarrage pour nettoyer d'éventuels
+// contenus déjà enregistrés avec des caractères « jolis ».
+function normalizeAll() {
+  let changed = false;
+  for (const key of LIST_KEYS) {
+    WORDS[key] = WORDS[key].map((v) => {
+      const n = normalizeTypography(v);
+      if (n !== v) changed = true;
+      return n;
+    });
+  }
+  return changed;
+}
+
 // Supprime les doublons de chaque liste (garde le 1er, conserve l'ordre).
 // Renvoie true si au moins un doublon a été retiré.
 function dedupeAll() {
@@ -336,7 +367,8 @@ const server = http.createServer((req, res) => {
 
       let changed = false, message = "";
       if (msg.action === "add") {
-        const value = (msg.value || "").toString().trim();
+        // normalise la typographie (apostrophes « jolies », « … », etc.) à l'import
+        const value = normalizeTypography(msg.value).trim();
         if (!value) {
           message = "rien à ajouter";
         } else if (listName === "texts") {
@@ -367,7 +399,7 @@ const server = http.createServer((req, res) => {
       } else if (msg.action === "edit") {
         // remplace une entrée existante (utilisé pour modifier un texte)
         const oldValue = (msg.oldValue || "").toString();
-        const value = (msg.value || "").toString().trim();
+        const value = normalizeTypography(msg.value).trim(); // uniformise apostrophes / « … » etc.
         if (!value) return sendJson(res, 400, { error: "le contenu ne peut pas être vide" });
         const idx = WORDS[listName].indexOf(oldValue);
         if (idx === -1) return sendJson(res, 400, { error: "introuvable (déjà modifié ?)" });
@@ -444,6 +476,13 @@ const rooms = new Map(); // code -> room
 let pid = 0;
 
 const COURSE_GRACE_MS = 45000;          // temps max après le 1er arrivé (course)
+// Pour GAGNER une course, il ne suffit pas d'arriver au bout : il faut avoir
+// VRAIMENT tapé le texte. Une arrivée en dessous de ces seuils (ex. on appuie
+// sur espace sans rien écrire de correct) est marquée « invalide » : le joueur
+// est classé après tous ceux qui ont fini correctement, et son score « poubelle »
+// ne compte pas au classement.
+const MIN_FINISH_PROGRESS = 50;          // % du texte réellement tapé correctement
+const MIN_FINISH_ACCURACY = 50;          // % de précision minimum
 const ELIM_COUNT = 50;                   // nb de mots par manche (élimination, contenu « mots »)
 const ELIM_DURATION_MS = 18000;          // durée d'une manche
 const ELIM_GAP_MS = 3500;                // pause entre les manches
@@ -545,6 +584,7 @@ function startCourse(room) {
   room.firstFinishTimer = null;
   for (const p of room.players.values()) {
     p.progress = 0; p.wpm = 0; p.finished = false; p.finishTime = null; p.rank = null;
+    p.validFinish = false; p.finishProgress = 0;
   }
   if (room.mode === "hard") {
     room.seed = Math.floor(Math.random() * 1e9);
@@ -571,15 +611,20 @@ function endCourse(room) {
   if (room.firstFinishTimer) clearTimeout(room.firstFinishTimer);
   const players = [...room.players.values()];
   const ranking = players
-    .map((p) => ({
-      name: p.name,
-      finished: p.finished,
-      time: p.finishTime,
-      wpm: p.wpm,
-      accuracy: p.accuracy || 0,
-      progress: p.progress,
-    }))
+    .map((p) => {
+      const valid = p.finished && p.validFinish;      // arrivée VRAIE (texte tapé)
+      return {
+        name: p.name,
+        finished: valid,                              // seul un finish valide « compte »
+        invalid: p.finished && !p.validFinish,        // arrivé au bout mais en tapant n'importe quoi
+        time: p.finishTime,
+        wpm: p.wpm,
+        accuracy: p.accuracy || 0,
+        progress: p.finished ? (p.finishProgress != null ? p.finishProgress : p.progress) : p.progress,
+      };
+    })
     .sort((a, b) => {
+      // 1) ceux qui ont fini VALIDEMENT, par temps ; 2) les autres, par avancement
       if (a.finished && b.finished) return a.time - b.time;
       if (a.finished) return -1;
       if (b.finished) return 1;
@@ -880,7 +925,11 @@ wss.on("connection", (ws) => {
         p.finishTime = Date.now() - room.startedAt;
         p.wpm = msg.wpm || p.wpm;
         p.accuracy = msg.accuracy || 0;
-        p.progress = 100;
+        // a-t-il VRAIMENT tapé le texte ? (sinon : arrivée « poubelle », ne gagne pas)
+        const finishProgress = Math.max(0, Math.min(100, Math.round(msg.progress || 0)));
+        p.finishProgress = finishProgress;
+        p.validFinish = (p.accuracy >= MIN_FINISH_ACCURACY) && (finishProgress >= MIN_FINISH_PROGRESS);
+        p.progress = p.validFinish ? 100 : finishProgress; // barre pleine seulement si arrivée valide
         broadcast(room, { type: "update", players: raceState(room) });
         const all = [...room.players.values()];
         if (all.every((x) => x.finished)) { endCourse(room); }
@@ -995,11 +1044,14 @@ async function init() {
     try { fromStore = await loadStore(); storeOk = true; }
     catch (e) { console.error("[stockage en ligne] lecture impossible :", e.message); }
   }
+  // on uniformise la typographie (apostrophes « jolies », « … »…) puis on retire
+  // les doublons — utile pour nettoyer d'anciens contenus déjà enregistrés.
+  const normalized = normalizeAll();
   const deduped = dedupeAll();
-  if (deduped) saveFile();
+  if (normalized || deduped) saveFile();
   // 1er lancement avec un stockage vide → on y recopie les listes actuelles ;
-  // (sinon, si on vient de retirer des doublons, on pousse aussi la version nettoyée)
-  if (storeEnabled && storeOk && (!fromStore || deduped)) {
+  // (sinon, si on vient de nettoyer/normaliser, on pousse aussi la version propre)
+  if (storeEnabled && storeOk && (!fromStore || normalized || deduped)) {
     try { await saveStore(); }
     catch (e) { console.error("[stockage en ligne] écriture impossible :", e.message); storeOk = false; }
   }
