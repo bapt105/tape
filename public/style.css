@@ -161,6 +161,8 @@ kbd {
   display: flex; flex-wrap: wrap; gap: 0 .55rem;
   transition: transform .12s ease; will-change: transform;
 }
+/* Le texte est dessiné sur ce canvas (anti-triche : rien de lisible dans le DOM). */
+.type-canvas { display: block; width: 100%; pointer-events: none; }
 .word { display: inline-flex; }
 .l.correct { color: var(--text); }
 .l.wrong   { color: var(--error); }
@@ -479,7 +481,10 @@ kbd {
 .lb-id input:focus { border-color: var(--accent); }
 .lb-id .btn { padding: 8px 16px; font-size: .85rem; }
 .lb-id-note { color: var(--muted); font-size: .78rem; }
+.lb-id-hint { color: var(--muted); font-size: .76rem; margin: -8px 0 16px; line-height: 1.5; }
+.lb-id-hint b { color: var(--text); }
 .lb-tabs { margin-bottom: 18px; }
+.rs-hint2 { color: var(--muted); font-size: .72rem; line-height: 1.4; }
 
 .lb-text-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 .lb-text-filter .opt-select { max-width: 100%; }

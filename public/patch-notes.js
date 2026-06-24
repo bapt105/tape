@@ -18,6 +18,14 @@
    ============================================================ */
 const PATCH_NOTES = [
   {
+    version: "1.4",
+    date: "2026-06-24",
+    changes: [
+      "Sécurité : protège ton pseudo avec un CODE SECRET. Sans le bon code, personne ne peut écrire sur ton classement (fini les usurpations).",
+      "Anti-triche renforcé : le texte à taper est désormais DESSINÉ à l'écran — il n'apparaît plus du tout dans le code de la page, donc impossible à lire par un robot via l'inspecteur.",
+    ],
+  },
+  {
     version: "1.3",
     date: "2026-06-19",
     changes: [

@@ -200,13 +200,15 @@
     <section class="screen" id="screen-leaderboard">
       <h2 class="title-sm">🏆 classement</h2>
 
-      <!-- pseudo : sert à relier tes parties à ton profil -->
+      <!-- pseudo + code secret : relie tes parties à ton profil, et le protège -->
       <div class="lb-id">
         <span class="opt-label">ton pseudo</span>
         <input type="text" id="lb-name" maxlength="14" placeholder="joueur" autocomplete="off" />
+        <input type="password" id="lb-pin" maxlength="32" placeholder="code secret" autocomplete="off" />
         <button class="btn" id="lb-name-save">enregistrer</button>
         <span class="lb-id-note" id="lb-id-note"></span>
       </div>
+      <p class="lb-id-hint">🔒 Le <b>code secret</b> protège ton pseudo : personne ne peut modifier TON classement sans lui. Garde-le pour toi.</p>
 
       <!-- bascule classement / mon profil -->
       <div class="mode-pick lb-tabs" id="lb-tabs">

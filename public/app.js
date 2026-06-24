@@ -47,9 +47,26 @@ function createEngine(typingEl) {
   let words = [], input = [""], cur = 0;
   let started = false, finished = false, startTime = 0;
   let keystrokes = 0, correctKeys = 0, finite = true, spectator = false;
-  let wordEls = [], caretEl = null;
   let cb = { start() {}, progress() {}, finish() {}, error() {} };
 
+  /* ---------- Rendu sur CANVAS (anti-triche) ----------
+     Le texte à taper est DESSINÉ (des pixels) : il n'existe NULLE PART dans le
+     HTML. Un bot ne peut donc plus lire les mots via l'inspecteur (ni le texte,
+     ni l'ordre des lettres, ni leur position en CSS) — il n'y a rien à lire.
+     Le joueur, lui, voit tout normalement. */
+  const canvas = document.createElement("canvas");
+  canvas.className = "type-canvas";
+  streamEl.innerHTML = "";
+  streamEl.appendChild(canvas);
+  const ctx = canvas.getContext("2d");
+  let layout = [], cssW = 0, cssH = 0, caretOn = true;
+
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || "#888"; }
+  function fontInfo() {
+    const cs = getComputedStyle(streamEl);
+    const size = parseFloat(cs.fontSize) || 24;
+    return { size, family: cs.fontFamily || "monospace", line: parseFloat(cs.lineHeight) || size * 1.35 };
+  }
   function load(targetStr, opts = {}) {
     words = targetStr.trim().split(/\s+/);
     finite = opts.finite !== false;
@@ -58,75 +75,70 @@ function createEngine(typingEl) {
   function reset() {
     input = [""]; cur = 0; started = false; finished = false;
     startTime = 0; keystrokes = 0; correctKeys = 0;
-    render();
+    resizeCanvas(); draw();
   }
-  function render() {
-    streamEl.style.transform = "translateY(0)";
-    streamEl.innerHTML = "";
-    wordEls = words.map((w, i) => {
-      const el = document.createElement("div");
-      el.className = "word";
-      streamEl.appendChild(el);
-      return el;
-    });
-    caretEl = document.createElement("div");
-    caretEl.className = "caret";
-    streamEl.appendChild(caretEl);
-    words.forEach((_, i) => paintWord(i));
-    updateCaret();
+  function resizeCanvas() {
+    const w = streamEl.clientWidth || typingEl.clientWidth || 0;
+    if (!w) return;                      // écran caché (largeur 0) → on garde la taille actuelle
+    const h = typingEl.clientHeight || 110, dpr = window.devicePixelRatio || 1;
+    cssW = w; cssH = h;
+    canvas.style.width = w + "px"; canvas.style.height = h + "px";
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
-  // Renvoie une COPIE mélangée d'un tableau (mélange de Fisher-Yates).
-  function shuffled(arr) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+  // Calcule la position (ligne, x) de chaque mot pour la largeur courante.
+  function computeLayout(f) {
+    ctx.font = `${f.size}px ${f.family}`;
+    const spaceW = ctx.measureText(" ").width, gap = f.size * 0.3;
+    layout = [];
+    let x = 0, line = 0;
+    for (let i = 0; i < words.length; i++) {
+      const t = input[i] || "", w = words[i];
+      const shown = w.length >= t.length ? w : w + t.slice(w.length);
+      const ww = ctx.measureText(shown).width;
+      if (x > 0 && x + ww > cssW) { x = 0; line++; }
+      layout[i] = { line, x };
+      x += ww + spaceW + gap;
     }
-    return a;
   }
-  function paintWord(i) {
-    const el = wordEls[i], w = words[i], t = input[i] || "";
-    const total = Math.max(w.length, t.length);
-    const spans = [];
-    for (let j = 0; j < total; j++) {
-      const span = document.createElement("span");
-      let cls = "l", ch;
-      if (j < w.length) {
-        ch = w[j];
-        if (j < t.length) cls += t[j] === w[j] ? " correct" : " wrong";
-      } else { ch = t[j]; cls += " extra"; }
-      span.className = cls;
-      span.textContent = ch;          // textContent = échappement auto (sûr pour le code)
-      span.style.order = j;           // ordre VISUEL correct (flexbox)…
-      spans.push(span);
+  function draw() {
+    if (!cssW) resizeCanvas();
+    if (!cssW) return;
+    const f = fontInfo();
+    computeLayout(f);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.font = `${f.size}px ${f.family}`;
+    ctx.textBaseline = "top";
+    const cText = cssVar("--text"), cMuted = cssVar("--muted"), cErr = cssVar("--error"), cAccent = cssVar("--accent");
+    const lineH = f.line, padTop = Math.max(0, (lineH - f.size) / 2);
+    const offY = -((layout[cur] || { line: 0 }).line) * lineH; // ligne courante en haut
+    for (let i = 0; i < words.length; i++) {
+      const lay = layout[i]; if (!lay) continue;
+      const y = lay.line * lineH + offY + padTop;
+      if (y < -lineH || y > cssH) continue; // hors écran (au-dessus / en dessous)
+      const w = words[i], t = input[i] || "";
+      let cx = lay.x;
+      const total = Math.max(w.length, t.length);
+      for (let j = 0; j < total; j++) {
+        let ch, color;
+        if (j < w.length) { ch = w[j]; color = j < t.length ? (t[j] === w[j] ? cText : cErr) : cMuted; }
+        else { ch = t[j]; color = cErr; }
+        ctx.fillStyle = color;
+        ctx.fillText(ch, cx, y);
+        cx += ctx.measureText(ch).width;
+      }
     }
-    el._spans = spans; // ordre LOGIQUE (pour le curseur)
-    // …mais on insère les lettres dans le DOM dans un ordre MÉLANGÉ : un bot qui
-    // lit le texte via l'inspecteur (textContent/innerText) ne récupère que du
-    // charabia, alors que le joueur voit le mot correctement.
-    el.textContent = "";
-    for (const span of shuffled(spans)) el.appendChild(span);
-  }
-  function updateCaret() {
-    if (!caretEl || !wordEls[cur]) return;
-    const wordEl = wordEls[cur];
-    const spans = wordEl._spans || []; // ordre logique (le DOM, lui, est mélangé)
-    const li = (input[cur] || "").length;
-    // offsetLeft/Top des lettres sont relatifs à .words (seul parent positionné)
-    let left, top, h;
-    if (li < spans.length) {
-      const r = spans[li];
-      left = r.offsetLeft; top = r.offsetTop; h = r.offsetHeight;
-    } else if (spans.length) {
-      const r = spans[spans.length - 1];
-      left = r.offsetLeft + r.offsetWidth; top = r.offsetTop; h = r.offsetHeight;
-    } else {
-      left = wordEl.offsetLeft; top = wordEl.offsetTop; h = wordEl.offsetHeight || 30;
+    // curseur (clignotant)
+    const lay = layout[cur];
+    if (lay && caretOn && !spectator) {
+      const t = input[cur] || "", w = words[cur];
+      let prefix = "";
+      for (let j = 0; j < t.length; j++) prefix += j < w.length ? w[j] : t[j];
+      const cxx = lay.x + ctx.measureText(prefix).width;
+      const cyy = lay.line * lineH + offY + padTop;
+      ctx.fillStyle = cAccent;
+      ctx.fillRect(cxx, cyy, 2, f.size * 1.15);
     }
-    caretEl.style.left = left + "px";
-    caretEl.style.top = top + "px";
-    caretEl.style.height = h + "px";
-    streamEl.style.transform = `translateY(${-top}px)`;
   }
   function startTest() {
     started = true; startTime = now();
@@ -139,15 +151,15 @@ function createEngine(typingEl) {
     if (k === "Tab") return; // géré globalement (restart)
     if (k === "Backspace") {
       e.preventDefault();
-      if ((input[cur] || "").length > 0) { input[cur] = input[cur].slice(0, -1); paintWord(cur); }
-      else if (cur > 0) { cur--; paintWord(cur); }
-      updateCaret();
+      if ((input[cur] || "").length > 0) { input[cur] = input[cur].slice(0, -1); }
+      else if (cur > 0) { cur--; }
+      caretOn = true; draw();
       return;
     }
     if (k === " " || k === "Enter") {
       e.preventDefault();
       if ((input[cur] || "").length === 0) return;
-      if (cur < words.length - 1) { cur++; if (input[cur] === undefined) input[cur] = ""; updateCaret(); checkFinish(); cb.progress(stats()); }
+      if (cur < words.length - 1) { cur++; if (input[cur] === undefined) input[cur] = ""; caretOn = true; draw(); checkFinish(); cb.progress(stats()); }
       else if (finite) finish();
       return;
     }
@@ -160,13 +172,7 @@ function createEngine(typingEl) {
     else cb.error();
     if ((input[cur] || "").length < words[cur].length + 8) {
       input[cur] = (input[cur] || "") + k;
-      paintWord(cur);
-      // petit saut de la lettre quand elle est correcte
-      if (k === expected) {
-        const span = (wordEls[cur]._spans || [])[input[cur].length - 1];
-        if (span) span.classList.add("pop");
-      }
-      updateCaret();
+      caretOn = true; draw();
     }
     checkFinish();
     cb.progress(stats());
@@ -201,13 +207,16 @@ function createEngine(typingEl) {
   typingEl.addEventListener("focus", () => { if (!spectator) typingEl.classList.remove("blur"); });
   typingEl.addEventListener("blur", () => typingEl.classList.add("blur"));
   typingEl.addEventListener("mousedown", () => { if (!spectator) setTimeout(() => typingEl.focus(), 0); });
-  window.addEventListener("resize", () => updateCaret());
+  window.addEventListener("resize", () => { resizeCanvas(); draw(); });
+  // curseur clignotant + rafraîchit les couleurs (thème) — seulement si l'écran est visible
+  setInterval(() => { if (typingEl.offsetParent === null) return; caretOn = !caretOn; draw(); }, 530);
 
   return {
     load, reset,
     focus: () => { if (!spectator) typingEl.focus(); },
     forceFinish: finish,
     stats,
+    redraw: () => { resizeCanvas(); draw(); },
     on: (events) => { cb = { ...cb, ...events }; },
     isStarted: () => started,
     isFinished: () => finished,
@@ -1491,6 +1500,7 @@ function textExtra(s) { return { textId: hashText(s), textPreview: textPreviewOf
 
 const isOffline = () => location.protocol === "file:";
 function currentPseudo() { return (localStorage.getItem("tape-name") || "").trim(); }
+function currentPin() { return (localStorage.getItem("tape-pin") || "").trim(); }
 function setPseudo(name) {
   name = (name || "").trim().slice(0, 14);
   localStorage.setItem("tape-name", name);
@@ -1498,12 +1508,18 @@ function setPseudo(name) {
   const lb = $("#lb-name"); if (lb) lb.value = name;
   return name;
 }
+function setPin(pin) {
+  pin = (pin || "").trim().slice(0, 32);
+  localStorage.setItem("tape-pin", pin);
+  const lb = $("#lb-pin"); if (lb) lb.value = pin;
+  return pin;
+}
 
 /* ----- Envoi d'un score à la fin d'un solo ----- */
 async function submitScore(modeKey, s, extra) {
   try {
     const body = {
-      name: currentPseudo(), mode: modeKey,
+      name: currentPseudo(), pin: currentPin(), mode: modeKey,
       wpm: s.wpm, accuracy: s.accuracy, chars: s.correctChars, timeMs: Math.round(s.elapsedMs),
     };
     if (extra && extra.textId) { body.textId = extra.textId; body.textPreview = extra.textPreview; }
@@ -1523,21 +1539,24 @@ function renderResultSave(modeKey, s, extra) {
   if (!box) return;
   if (isOffline()) { box.innerHTML = '<span class="rs-note">classement indisponible hors-ligne</span>'; return; }
   if (!currentPseudo()) {
-    // pas encore de pseudo : on propose d'en choisir un pour « réclamer » le score
+    // pas encore de pseudo : on demande un pseudo + un code secret (protection)
     box.innerHTML = `<div class="rs-claim">
-        <span class="rs-note">choisis un pseudo pour enregistrer ce score :</span>
+        <span class="rs-note">choisis un pseudo et un code secret pour enregistrer ce score :</span>
         <span class="rs-row">
           <input type="text" id="rs-name" maxlength="14" placeholder="ton pseudo" autocomplete="off" />
+          <input type="password" id="rs-pin2" maxlength="32" placeholder="code secret" autocomplete="off" />
           <button class="btn" id="rs-save">enregistrer</button>
         </span>
+        <span class="rs-hint2">🔒 le code protège ton pseudo : personne ne pourra toucher à TON classement sans lui.</span>
       </div>`;
     const save = () => {
       const n = setPseudo($("#rs-name").value);
       if (!n) { $("#rs-name").focus(); return; }
+      setPin($("#rs-pin2").value);
       doSubmitScore(modeKey, s, extra);
     };
     $("#rs-save").addEventListener("click", save);
-    $("#rs-name").addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    $("#rs-pin2").addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
     return;
   }
   doSubmitScore(modeKey, s, extra);
@@ -1547,7 +1566,21 @@ async function doSubmitScore(modeKey, s, extra) {
   box.innerHTML = '<span class="rs-note">enregistrement…</span>';
   const r = await submitScore(modeKey, s, extra);
   if (!r || !r.ok) { box.innerHTML = '<span class="rs-note err">classement injoignable — le serveur est-il lancé ?</span>'; return; }
-  if (!r.recorded) { box.innerHTML = '<span class="rs-note">score trop court pour le classement</span>'; return; }
+  if (r.reason === "nopin" || r.reason === "badpin") {
+    // le pseudo est protégé par un code : on le redemande puis on réessaie
+    box.innerHTML = `<div class="rs-claim">
+        <span class="rs-note err">🔒 « ${escapeText(currentPseudo())} » est protégé par un code secret. Entre-le :</span>
+        <span class="rs-row">
+          <input type="password" id="rs-pin" maxlength="32" placeholder="code secret" autocomplete="off" />
+          <button class="btn" id="rs-pin-save">valider</button>
+        </span>
+      </div>`;
+    const retry = () => { setPin($("#rs-pin").value); doSubmitScore(modeKey, s, extra); };
+    $("#rs-pin-save").addEventListener("click", retry);
+    $("#rs-pin").addEventListener("keydown", (e) => { if (e.key === "Enter") retry(); });
+    return;
+  }
+  if (!r.recorded) { box.innerHTML = '<span class="rs-note">score non enregistré (trop court, ou vitesse anormale).</span>'; return; }
   const rankTxt = r.rank ? ` · <b>${r.rank}<sup>e</sup></b> sur ${r.total}` : "";
   box.innerHTML = `<span class="rs-ok">✓ enregistré au classement (${escapeText(currentPseudo())})${rankTxt}</span>
       <button class="link rs-see" id="rs-see">voir le classement →</button>`;
@@ -1627,6 +1660,7 @@ function renderCodeFilter() {
 
 onEnter["leaderboard"] = () => {
   $("#lb-name").value = currentPseudo();
+  $("#lb-pin").value = currentPin();
   $("#lb-id-note").textContent = currentPseudo() ? "" : "choisis un pseudo pour suivre ta progression";
   showLbTab(lbTab);
 };
@@ -1766,11 +1800,13 @@ function statCard(value, unit, label, extra) {
 /* ----- Branchements de l'écran classement ----- */
 $("#lb-name-save").addEventListener("click", () => {
   const n = setPseudo($("#lb-name").value);
-  $("#lb-id-note").textContent = n ? "pseudo enregistré ✓" : "entre un pseudo";
+  setPin($("#lb-pin").value);
+  $("#lb-id-note").textContent = n ? "enregistré ✓" : "entre un pseudo";
   if (lbTab === "profile") renderProfile();
   else renderLeaderboard();
 });
 $("#lb-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#lb-name-save").click(); });
+$("#lb-pin").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#lb-name-save").click(); });
 $$("#lb-tabs .opt").forEach((b) => b.addEventListener("click", () => showLbTab(b.dataset.lbtab)));
 $$("#lb-mode-filter .opt").forEach((b) =>
   b.addEventListener("click", () => {

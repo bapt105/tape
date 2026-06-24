@@ -7,6 +7,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_WEB, CODE_JAVA, CODE_CPP } = require("./public/words.js");
 
@@ -174,6 +175,22 @@ function cleanName(name) {
   name = (name || "").toString().replace(/\s+/g, " ").trim().slice(0, 14);
   return name || "joueur";
 }
+// Code secret d'un pseudo : on ne stocke JAMAIS le code en clair, seulement une
+// empreinte (hash). Impossible de le retrouver depuis les données sauvegardées.
+function hashPin(pin) {
+  return crypto.createHash("sha256").update("tape:" + String(pin)).digest("hex");
+}
+// Vérifie le droit d'écrire sur un pseudo. Un pseudo « protégé » (qui a déjà un
+// code) exige le bon code. Un pseudo non protégé est libre (et sera « réclamé »
+// par le 1er code fourni). Renvoie { ok, reason }.
+function checkPin(name, pin) {
+  const p = SCORES.players[cleanName(name)];
+  if (p && p.pinHash) {
+    if (!pin) return { ok: false, reason: "nopin" };       // protégé, aucun code fourni
+    if (hashPin(pin) !== p.pinHash) return { ok: false, reason: "badpin" }; // mauvais code
+  }
+  return { ok: true };
+}
 function emptyProfile(name) {
   const t = Date.now();
   return {
@@ -190,7 +207,7 @@ function emptyProfile(name) {
 // Enregistre une partie terminée. Renvoie le profil mis à jour (ou null si
 // la partie est trop courte/invalide pour compter). `textId`/`textPreview`
 // servent au mode « texte » ; `codeCat` au mode « code » (classement par catégorie).
-function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview, codeCat }) {
+function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview, codeCat, pin }) {
   if (!SCORE_MODES.includes(mode)) return null;
   const key = cleanName(name);
   if (isBanned(key)) return null;            // pseudo banni → on n'enregistre rien
@@ -216,6 +233,10 @@ function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview,
     p = emptyProfile(key);
     SCORES.players[key] = p;
   }
+  // « réclame » le pseudo : si un code est fourni et que le pseudo n'en a pas
+  // encore, on le protège avec ce code (les fois suivantes, il faudra le redonner).
+  if (pin && !p.pinHash) p.pinHash = hashPin(pin);
+
   p.lastSeen = Date.now();
   p.count++; p.sumWpm += wpm; p.sumAcc += acc; p.sumChars += chars; p.sumTimeMs += timeMs;
   if (wpm > p.bestWpm) { p.bestWpm = wpm; p.bestMode = mode; }
@@ -312,6 +333,13 @@ function deletePlayerScores(name) {
   delete SCORES.players[key];
   if (existed) persistScores();
   return existed;
+}
+// Version « publique » d'un profil : on retire l'empreinte du code (jamais
+// envoyée au navigateur) et on ajoute un simple drapeau « protégé ».
+function publicProfile(p) {
+  if (!p) return null;
+  const { pinHash, ...rest } = p;
+  return { ...rest, protected: !!pinHash };
 }
 // Liste légère des profils (pour le panneau admin « joueurs »).
 function playersAdminList() {
@@ -520,7 +548,7 @@ const server = http.createServer((req, res) => {
     let name = "";
     try { name = new URL(req.url, "http://x").searchParams.get("name") || ""; } catch {}
     const p = SCORES.players[cleanName(name)] || null;
-    return sendJson(res, 200, { profile: p, rank: p ? rankOf(p.name) : null });
+    return sendJson(res, 200, { profile: publicProfile(p), rank: p ? rankOf(p.name) : null });
   }
   // Enregistre une partie terminée (envoyé par le client à la fin d'un solo).
   if (urlPath === "/api/score" && req.method === "POST") {
@@ -528,14 +556,17 @@ const server = http.createServer((req, res) => {
     req.on("data", (c) => { body += c; if (body.length > 1e5) req.destroy(); });
     req.on("end", () => {
       let msg; try { msg = JSON.parse(body); } catch { return sendJson(res, 400, { error: "requête invalide" }); }
+      // vérifie le droit d'écrire sur ce pseudo (code secret)
+      const chk = checkPin(msg.name, msg.pin);
+      if (!chk.ok) return sendJson(res, 200, { ok: true, recorded: false, reason: chk.reason });
       const p = recordScore({
         name: msg.name, mode: msg.mode,
         wpm: msg.wpm, acc: msg.accuracy, chars: msg.chars, timeMs: msg.timeMs,
-        textId: msg.textId, textPreview: msg.textPreview, codeCat: msg.codeCat,
+        textId: msg.textId, textPreview: msg.textPreview, codeCat: msg.codeCat, pin: msg.pin,
       });
       if (!p) return sendJson(res, 200, { ok: true, recorded: false });
       const { rank, total } = rankOf(p.name);
-      return sendJson(res, 200, { ok: true, recorded: true, profile: p, rank, total });
+      return sendJson(res, 200, { ok: true, recorded: true, profile: publicProfile(p), rank, total });
     });
     return;
   }

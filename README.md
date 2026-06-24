@@ -94,6 +94,10 @@ Accessible par le bouton **« classement »** (en haut, ou la carte sur l'accuei
   alors enregistrées automatiquement sous ce pseudo. Les parties **multijoueur**
   de type course / difficile / speed (où chacun finit avec un vrai score) comptent
   aussi.
+- 🔒 **Protège ton pseudo avec un code secret.** La première fois que tu enregistres
+  un score avec un code, ton pseudo est « réservé » : ensuite, **il faut le bon code**
+  pour écrire dessus. Plus personne ne peut ruiner ton classement en prenant ton nom.
+  (Le code n'est jamais stocké en clair, seulement une empreinte impossible à inverser.)
 - **Onglet « classement »** — le tableau de tous les joueurs, trié par **record**,
   avec aussi la **moyenne**, le **nombre de parties** et la **précision**. Tu peux
   le filtrer par mode (mots, texte, zen, difficile, speed). En mode **texte**, un
@@ -280,6 +284,11 @@ donnes 2 clés. **C'est gratuit et sans carte bancaire.** Étapes :
 - **Régler l'élimination** → constantes `ELIM_COUNT`, `ELIM_DURATION_MS` dans `server.js`.
 - **Régler le classement** → constantes `RUNS_KEPT` (nb de parties gardées par
   joueur pour les courbes) et `MAX_PROFILES` (nb max de profils) dans `server.js`.
+- **Anti-triche** → le texte à taper est **dessiné sur un canvas** (rien à lire dans
+  le code de la page). De plus, côté serveur, un score au-dessus de `MAX_HUMAN_WPM`
+  (dans `server.js`) est considéré comme un robot : il ne gagne pas et n'entre pas
+  au classement. Un jeu de frappe ne sera jamais 100 % increvable, mais ça bloque
+  les bots simples et protège le classement.
 
 > Le jeu est pensé pour un **clavier physique** (ordinateur). Sur mobile, l'affichage
 > s'adapte mais la frappe reste plus confortable au clavier.
