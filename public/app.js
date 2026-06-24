@@ -60,6 +60,20 @@ function createEngine(typingEl) {
   streamEl.appendChild(canvas);
   const ctx = canvas.getContext("2d");
   let layout = [], cssW = 0, cssH = 0, caretOn = true;
+  let pop = null, popRaf = 0; // petit « saut » de la dernière bonne lettre tapée
+  const POP_MS = 200;
+  // Lance l'animation de saut sur la lettre (i, j) et redessine pendant ~200 ms.
+  function startPop(i, j) {
+    pop = { i, j, start: now() };
+    if (!popRaf) animatePop();
+  }
+  function animatePop() {
+    popRaf = requestAnimationFrame(() => {
+      popRaf = 0;
+      if (pop && now() - pop.start < POP_MS) { draw(); animatePop(); }
+      else { pop = null; draw(); }
+    });
+  }
 
   function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || "#888"; }
   function fontInfo() {
@@ -124,8 +138,24 @@ function createEngine(typingEl) {
         if (j < w.length) { ch = w[j]; color = j < t.length ? (t[j] === w[j] ? cText : cErr) : cMuted; }
         else { ch = t[j]; color = cErr; }
         ctx.fillStyle = color;
-        ctx.fillText(ch, cx, y);
-        cx += ctx.measureText(ch).width;
+        const cw = ctx.measureText(ch).width;
+        // petit saut de la lettre qui vient d'être bien tapée
+        let bump = 0;
+        if (pop && pop.i === i && pop.j === j) {
+          const p = (now() - pop.start) / POP_MS;
+          if (p < 1) bump = Math.sin(p * Math.PI); // 0 → 1 → 0
+        }
+        if (bump > 0) {
+          const sc = 1 + bump * 0.28, dy = -bump * f.size * 0.2;
+          ctx.save();
+          ctx.translate(cx + cw / 2, y + f.size / 2 + dy);
+          ctx.scale(sc, sc);
+          ctx.fillText(ch, -cw / 2, -f.size / 2);
+          ctx.restore();
+        } else {
+          ctx.fillText(ch, cx, y);
+        }
+        cx += cw;
       }
     }
     // curseur (clignotant)
@@ -172,7 +202,9 @@ function createEngine(typingEl) {
     else cb.error();
     if ((input[cur] || "").length < words[cur].length + 8) {
       input[cur] = (input[cur] || "") + k;
-      caretOn = true; draw();
+      caretOn = true;
+      if (k === expected) startPop(cur, input[cur].length - 1); // bonne lettre → petit saut
+      draw();
     }
     checkFinish();
     cb.progress(stats());
