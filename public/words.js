@@ -97,39 +97,71 @@ const TEXTS = [
   "Il pleuvait depuis le matin, une pluie fine et régulière qui lavait les toits et les trottoirs. Derrière la vitre, l'enfant suivait du doigt les gouttes qui glissaient en traçant des chemins. Dehors, le monde paraissait plus doux, plus lent, presque endormi."
 ];
 
-// Lignes de code pour le mode « code » : on tape de vraies lignes de programmation.
-// Chaque entrée est découpée en « jetons » séparés par des espaces, tapés l'un
-// après l'autre comme des mots.
-const CODE_SNIPPETS = [
-  "const sum = (a, b) => a + b;",
-  "let total = 0;",
-  "for (let i = 0; i < n; i++) {",
-  "if (x > 0) { return true; }",
-  "function greet(name) { return `Hi ${name}`; }",
-  "console.log(\"Hello, world!\");",
-  "const arr = [1, 2, 3].map(x => x * 2);",
-  "return items.filter(i => i.active);",
-  "while (i < len) { i += 1; }",
-  "const { id, name } = user;",
-  "import React from \"react\";",
-  "export default function App() {}",
-  "try { run(); } catch (e) { log(e); }",
-  "arr.forEach((item) => print(item));",
-  "const obj = { x: 1, y: 2 };",
-  "if (a === b && c !== d) doThing();",
-  "def factorial(n): return n * factorial(n - 1)",
-  "for x in range(0, 10): print(x)",
-  "data = [row for row in rows if row.ok]",
-  "public static void main(String[] args) {}",
-  "System.out.println(\"done\");",
-  "int[] nums = new int[10];",
-  "SELECT * FROM users WHERE age > 18;",
-  "git commit -m \"fix: typo\"",
-  "npm install --save-dev eslint",
-  "const res = await fetch(url).then(r => r.json());",
-  "x = (y > 0) ? 1 : -1;",
-  "ptr->next = head; head = ptr;",
+// Lignes de code pour le mode « code », rangées par SOUS-CATÉGORIE. On tape de
+// vraies lignes de programmation, découpées en « jetons » séparés par des espaces.
+
+// Développement web : HTML, CSS, JavaScript, PHP
+const CODE_WEB = [
+  "<div class=\"card\"></div>",
+  "<a href=\"/home\">Accueil</a>",
+  "<img src=\"logo.png\" alt=\"logo\">",
+  "<input type=\"text\" name=\"email\">",
+  "<ul><li>Item</li></ul>",
+  ".btn { color: #fff; padding: 8px; }",
+  "display: flex; justify-content: center;",
+  "margin: 0 auto; max-width: 960px;",
+  "font-size: 1.2rem; font-weight: 700;",
+  "position: absolute; top: 0; left: 0;",
+  "const el = document.querySelector(\".btn\");",
+  "arr.map(x => x * 2).filter(n => n > 0);",
+  "fetch(url).then(r => r.json());",
+  "let total = items.reduce((a, b) => a + b, 0);",
+  "if (user && user.name) greet(user.name);",
+  "<?php echo \"Hello\"; ?>",
+  "$name = $_POST[\"name\"];",
+  "foreach ($items as $item) { echo $item; }",
+  "function add($a, $b) { return $a + $b; }",
+  "$arr = array(\"a\", \"b\", \"c\");",
 ];
+
+// Java
+const CODE_JAVA = [
+  "public static void main(String[] args) {}",
+  "System.out.println(\"Hello, world!\");",
+  "int[] nums = new int[10];",
+  "List<String> list = new ArrayList<>();",
+  "for (int i = 0; i < n; i++) { sum += i; }",
+  "public class Animal { private String name; }",
+  "if (x != null && x.isValid()) run();",
+  "String msg = String.format(\"hi %s\", name);",
+  "try { run(); } catch (Exception e) {}",
+  "map.put(\"key\", value);",
+  "return list.stream().filter(x -> x > 0).count();",
+  "private final int MAX = 100;",
+  "@Override public String toString() { return name; }",
+  "while (it.hasNext()) { sum += it.next(); }",
+];
+
+// C++
+const CODE_CPP = [
+  "#include <iostream>",
+  "int main() { return 0; }",
+  "std::cout << \"Hello\" << std::endl;",
+  "std::vector<int> v = {1, 2, 3};",
+  "for (int i = 0; i < n; ++i) sum += i;",
+  "int* ptr = new int[10];",
+  "if (a == b && c != d) doThing();",
+  "class Node { public: int val; Node* next; };",
+  "std::string s = \"hello\";",
+  "template <typename T> T maxOf(T a, T b);",
+  "auto it = m.find(key);",
+  "delete[] ptr;",
+  "while (head != nullptr) head = head->next;",
+  "std::sort(v.begin(), v.end());",
+];
+
+// Regroupement par catégorie (clé utilisée partout : web / java / cpp).
+const CODE_CATEGORIES = { web: CODE_WEB, java: CODE_JAVA, cpp: CODE_CPP };
 
 // Nombre de textes (utilisé par le serveur pour synchroniser les courses)
 const TEXTS_COUNT = TEXTS.length;
@@ -161,10 +193,10 @@ function generateWords(count, seed) { return pickWords(COMMON_WORDS, count, seed
 function generateHardWords(count, seed) { return pickWords(HARD_WORDS, count, seed); }
 function generateSpeedWords(count, seed) { return pickWords(SPEED_WORDS, count, seed); }
 
-// Mode « code » : on enchaîne des lignes de code entières (et non des mots isolés)
-// jusqu'à obtenir au moins `count` jetons à taper.
-function generateCode(count, seed) {
-  const list = (typeof CODE_SNIPPETS !== "undefined" && CODE_SNIPPETS.length) ? CODE_SNIPPETS : ["code"];
+// Mode « code » : on enchaîne des lignes de code entières d'une CATÉGORIE
+// (web / java / cpp) jusqu'à obtenir au moins `count` jetons à taper.
+function generateCode(count, seed, cat) {
+  const list = (CODE_CATEGORIES[cat] && CODE_CATEGORIES[cat].length) ? CODE_CATEGORIES[cat] : CODE_WEB;
   const rng = seed === undefined ? Math.random : mulberry32(seed);
   const out = [];
   let tokens = 0, last = -1;
@@ -180,5 +212,5 @@ function generateCode(count, seed) {
 
 // Expose pour le navigateur et pour Node (serveur).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_SNIPPETS, TEXTS_COUNT, generateWords, generateHardWords, generateSpeedWords, generateCode, mulberry32 };
+  module.exports = { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_WEB, CODE_JAVA, CODE_CPP, CODE_CATEGORIES, TEXTS_COUNT, generateWords, generateHardWords, generateSpeedWords, generateCode, mulberry32 };
 }

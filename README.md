@@ -61,7 +61,8 @@ Ouvre **http://localhost:3000** dans ton navigateur. 🎉
 - **Zen** — sans chrono : finis un nombre de mots à ton rythme.
 - **Difficile** — mots compliqués, pleins d'accents.
 - **Speed** — mots **simples et sans accents** : tape le plus vite possible.
-- **Code** `</>` — de vraies **lignes de code** (toutes langues) à taper le plus vite possible.
+- **Code** `</>` — de vraies **lignes de code** à taper vite, par **langage au choix** :
+  **web** (HTML/CSS/JS/PHP), **Java** ou **C++** (chaque catégorie a son propre classement).
 
 `Tab` recommence une partie. `◐` en haut à droite change le thème clair/sombre.
 
@@ -257,8 +258,8 @@ donnes 2 clés. **C'est gratuit et sans carte bancaire.** Étapes :
   encore été ajouté via l'admin.
 - **Ajouter/retirer en direct** → bouton **admin** en bas du site (mot de passe
   dans `server.js`, variable `ADMIN_PASSWORD`). Onglets : mots courants, difficile,
-  **speed**, **code**, textes, et **joueurs**. C'est ce qui est sauvegardé (fichier
-  en local, et stockage Upstash en ligne — voir section 4).
+  **speed**, **code web / java / c++**, textes, et **joueurs**. C'est ce qui est
+  sauvegardé (fichier en local, et stockage Upstash en ligne — voir section 4).
 - **Modérer les joueurs** → onglet **« joueurs »** de l'admin : **supprimer le
   score** d'un pseudo, ou le **bannir** (il ne pourra plus enregistrer de score
   ni jouer en multijoueur ; un bouton « débannir » annule).

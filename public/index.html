@@ -153,6 +153,12 @@
 
     <!-- ====================== SOLO : CODE ====================== -->
     <section class="screen" id="screen-solo-code">
+      <div class="options" id="code-cat-options">
+        <span class="opt-label">langage</span>
+        <button class="opt active" data-cat="web">web (html/css/js/php)</button>
+        <button class="opt" data-cat="java">java</button>
+        <button class="opt" data-cat="cpp">c++</button>
+      </div>
       <div class="options" id="code-options">
         <span class="opt-label">durée</span>
         <button class="opt" data-dur="15">15s</button>
@@ -223,6 +229,13 @@
         <div class="lb-text-filter hidden" id="lb-text-filter">
           <span class="opt-label">texte</span>
           <select class="opt-select" id="lb-text-select"></select>
+        </div>
+        <div class="options lb-code-filter hidden" id="lb-code-filter">
+          <span class="opt-label">langage</span>
+          <button class="opt active" data-lbcat="">tous</button>
+          <button class="opt" data-lbcat="web">web</button>
+          <button class="opt" data-lbcat="java">java</button>
+          <button class="opt" data-lbcat="cpp">c++</button>
         </div>
         <div class="lb-table" id="lb-table"></div>
       </div>
@@ -392,7 +405,9 @@
           <button class="opt active" data-list="common">mots courants</button>
           <button class="opt" data-list="hard">difficile</button>
           <button class="opt" data-list="speed">speed</button>
-          <button class="opt" data-list="code">code</button>
+          <button class="opt" data-list="codeweb">code web</button>
+          <button class="opt" data-list="codejava">code java</button>
+          <button class="opt" data-list="codecpp">code c++</button>
           <button class="opt" data-list="texts">textes</button>
           <button class="opt" data-list="players">joueurs</button>
         </div>

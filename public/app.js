@@ -440,11 +440,11 @@ onEnter["solo-speed"] = () => { setupSpeed(); setTimeout(() => speedEngine.focus
    SOLO — CODE (chrono, vraies lignes de code)
    ============================================================ */
 const codeEngine = createEngine($("#code-typing"));
-let codeDuration = 30, codeTimer = null, codeTick = null;
+let codeDuration = 30, codeTimer = null, codeTick = null, codeCat = "web"; // catégorie : web / java / cpp
 
 function setupCode() {
   const enough = Math.max(30, Math.round(codeDuration * 2.5)); // jetons de code = plus longs
-  codeEngine.load(generateCode(enough), { finite: false });
+  codeEngine.load(generateCode(enough, undefined, codeCat), { finite: false });
   $("#code-timer").textContent = codeDuration;
   $("#code-wpm").textContent = "0 mpm";
   clearInterval(codeTick); clearTimeout(codeTimer);
@@ -459,13 +459,22 @@ codeEngine.on({
     codeTimer = setTimeout(() => { clearInterval(codeTick); codeEngine.forceFinish(); }, codeDuration * 1000);
   },
   progress(s) { $("#code-wpm").textContent = s.wpm + " mpm"; },
-  finish(s) { clearInterval(codeTick); clearTimeout(codeTimer); showResult({ ...s, elapsedMs: codeDuration * 1000 }, "code"); },
+  finish(s) { clearInterval(codeTick); clearTimeout(codeTimer); showResult({ ...s, elapsedMs: codeDuration * 1000 }, "code", { codeCat }); },
 });
 $$("#code-options .opt").forEach((b) =>
   b.addEventListener("click", () => {
     $$("#code-options .opt").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     codeDuration = +b.dataset.dur;
+    setupCode(); codeEngine.focus();
+  })
+);
+// Choix du langage (web / java / c++)
+$$("#code-cat-options .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#code-cat-options .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    codeCat = b.dataset.cat;
     setupCode(); codeEngine.focus();
   })
 );
@@ -1095,7 +1104,9 @@ function applyWordData(data) {
   if (Array.isArray(data.hard)   && data.hard.length)   { HARD_WORDS.length = 0;   HARD_WORDS.push(...data.hard); }
   if (Array.isArray(data.speed)  && data.speed.length)  { SPEED_WORDS.length = 0;  SPEED_WORDS.push(...data.speed); }
   if (Array.isArray(data.texts)  && data.texts.length)  { TEXTS.length = 0;        TEXTS.push(...data.texts); }
-  if (Array.isArray(data.code)   && data.code.length)   { CODE_SNIPPETS.length = 0; CODE_SNIPPETS.push(...data.code); }
+  if (Array.isArray(data.codeweb)  && data.codeweb.length)  { CODE_WEB.length = 0;  CODE_WEB.push(...data.codeweb); }
+  if (Array.isArray(data.codejava) && data.codejava.length) { CODE_JAVA.length = 0; CODE_JAVA.push(...data.codejava); }
+  if (Array.isArray(data.codecpp)  && data.codecpp.length)  { CODE_CPP.length = 0;  CODE_CPP.push(...data.codecpp); }
 }
 
 // Récupère les listes depuis le serveur au chargement de la page.
@@ -1122,14 +1133,16 @@ const adminOverlay = $("#admin-overlay");
 let adminPassword = "";                                  // mémorisé après connexion réussie
 let adminList = "common";                                // liste active dans le panneau
 let adminSearch = "";                                    // texte de recherche (filtre la liste)
-let adminData = { common: [], hard: [], speed: [], texts: [], code: [] };     // dernières listes connues
-const LINE_LISTS = ["texts", "code"]; // listes « une entrée = une ligne entière »
+let adminData = { common: [], hard: [], speed: [], texts: [], codeweb: [], codejava: [], codecpp: [] }; // dernières listes connues
+const LINE_LISTS = ["texts", "codeweb", "codejava", "codecpp"]; // « une entrée = une ligne entière »
 const ADMIN_META = {
-  common: { hint: "Mots du mode « mots courants » (aussi patate chaude et élimination). Tu peux en ajouter plusieurs séparés par des espaces.", ph: "ex : bonjour maison soleil" },
-  hard:   { hint: "Mots du mode « difficile ». Plusieurs mots possibles, séparés par des espaces.", ph: "ex : anticonstitutionnellement" },
-  speed:  { hint: "Mots du mode « speed » : simples et SANS accent. Plusieurs possibles, séparés par des espaces.", ph: "ex : maison velo jardin" },
-  code:   { hint: "Lignes de code du mode « code ». Une ligne complète par entrée. Modifie une ligne dans son cadre puis « enregistrer ».", ph: "ex : const x = 5;" },
-  texts:  { hint: "Textes du mode « texte ». Modifie un texte directement dans son cadre puis « enregistrer ».", ph: "Colle ici un nouveau texte complet…" },
+  common:   { hint: "Mots du mode « mots courants » (aussi patate chaude et élimination). Tu peux en ajouter plusieurs séparés par des espaces.", ph: "ex : bonjour maison soleil" },
+  hard:     { hint: "Mots du mode « difficile ». Plusieurs mots possibles, séparés par des espaces.", ph: "ex : anticonstitutionnellement" },
+  speed:    { hint: "Mots du mode « speed » : simples et SANS accent. Plusieurs possibles, séparés par des espaces.", ph: "ex : maison velo jardin" },
+  codeweb:  { hint: "Mode « code » — catégorie WEB (HTML/CSS/JS/PHP). Une ligne complète par entrée.", ph: "ex : const el = document.querySelector(\".btn\");" },
+  codejava: { hint: "Mode « code » — catégorie JAVA. Une ligne complète par entrée.", ph: "ex : System.out.println(\"Hello\");" },
+  codecpp:  { hint: "Mode « code » — catégorie C++. Une ligne complète par entrée.", ph: "ex : std::cout << \"Hello\";" },
+  texts:    { hint: "Textes du mode « texte ». Modifie un texte directement dans son cadre puis « enregistrer ».", ph: "Colle ici un nouveau texte complet…" },
 };
 
 function openAdmin() {
@@ -1180,7 +1193,7 @@ function renderAdminList() {
   const all = adminData[adminList] || [];
   const q = adminSearch.trim().toLowerCase();
   const items = q ? all.filter((v) => v.toLowerCase().includes(q)) : all;
-  const unit = adminList === "texts" ? "texte(s)" : adminList === "code" ? "ligne(s)" : "mot(s)";
+  const unit = adminList === "texts" ? "texte(s)" : adminList.startsWith("code") ? "ligne(s)" : "mot(s)";
   $("#admin-count").textContent = q
     ? `${items.length} affiché(s) sur ${all.length} ${unit}`
     : `${all.length} ${unit}`;
@@ -1494,6 +1507,7 @@ async function submitScore(modeKey, s, extra) {
       wpm: s.wpm, accuracy: s.accuracy, chars: s.correctChars, timeMs: Math.round(s.elapsedMs),
     };
     if (extra && extra.textId) { body.textId = extra.textId; body.textPreview = extra.textPreview; }
+    if (extra && extra.codeCat) { body.codeCat = extra.codeCat; }
     const res = await fetch("/api/score", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1587,7 +1601,7 @@ function offlineHtml() {
 }
 
 /* ----- État de l'écran classement ----- */
-let lbTab = "ranking", lbMode = "tous", lbTextId = ""; // lbTextId "" = tous les textes
+let lbTab = "ranking", lbMode = "tous", lbTextId = "", lbCodeCat = ""; // "" = tous
 
 // Affiche (ou cache) le menu déroulant « texte », et le remplit avec les textes
 // actuels du jeu. Visible uniquement quand le mode « texte » est sélectionné.
@@ -1602,6 +1616,13 @@ function renderTextFilter() {
     const id = hashText(t);
     sel.appendChild(new Option(`#${i + 1} — ${textPreviewOf(t)}`, id, lbTextId === id, lbTextId === id));
   });
+}
+// Affiche (ou cache) le filtre de langage, visible seulement en mode « code ».
+function renderCodeFilter() {
+  const wrap = $("#lb-code-filter");
+  if (lbMode !== "code") { wrap.classList.add("hidden"); return; }
+  wrap.classList.remove("hidden");
+  $$("#lb-code-filter .opt").forEach((b) => b.classList.toggle("active", b.dataset.lbcat === lbCodeCat));
 }
 
 onEnter["leaderboard"] = () => {
@@ -1622,18 +1643,20 @@ function showLbTab(tab) {
 /* ----- Vue : classement global ----- */
 async function renderLeaderboard() {
   renderTextFilter();
+  renderCodeFilter();
   const view = $("#lb-table");
   if (isOffline()) { view.innerHTML = offlineHtml(); return; }
   view.innerHTML = '<p class="lb-loading">chargement…</p>';
   let url = `/api/leaderboard?mode=${encodeURIComponent(lbMode)}`;
   if (lbMode === "texte" && lbTextId) url += `&text=${encodeURIComponent(lbTextId)}`;
+  if (lbMode === "code" && lbCodeCat) url += `&cat=${encodeURIComponent(lbCodeCat)}`;
   let data;
   try { data = await (await fetch(url)).json(); }
   catch { view.innerHTML = '<p class="lb-empty">classement injoignable — le serveur est-il lancé ?</p>'; return; }
   const players = data.players || [];
   if (!players.length) {
-    view.innerHTML = (lbMode === "texte" && lbTextId)
-      ? '<p class="lb-empty">Aucun score sur ce texte pour l\'instant — sois le premier à le taper !</p>'
+    view.innerHTML = ((lbMode === "texte" && lbTextId) || (lbMode === "code" && lbCodeCat))
+      ? '<p class="lb-empty">Aucun score dans cette catégorie pour l\'instant — sois le premier !</p>'
       : '<p class="lb-empty">Aucun score pour l\'instant. Joue une partie solo pour ouvrir le classement !</p>';
     return;
   }
@@ -1754,7 +1777,7 @@ $$("#lb-mode-filter .opt").forEach((b) =>
     $$("#lb-mode-filter .opt").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     lbMode = b.dataset.lbmode;
-    lbTextId = ""; // en changeant de mode, on repart sur « tous les textes »
+    lbTextId = ""; lbCodeCat = ""; // en changeant de mode, on repart sur « tous »
     renderLeaderboard();
   })
 );
@@ -1762,6 +1785,12 @@ $("#lb-text-select").addEventListener("change", (e) => {
   lbTextId = e.target.value;
   renderLeaderboard();
 });
+$$("#lb-code-filter .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    lbCodeCat = b.dataset.lbcat;
+    renderLeaderboard();
+  })
+);
 
 /* ---------- démarrage ---------- */
 loadWordData();

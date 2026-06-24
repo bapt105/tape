@@ -8,7 +8,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
-const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_SNIPPETS } = require("./public/words.js");
+const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_WEB, CODE_JAVA, CODE_CPP } = require("./public/words.js");
 
 /* ---------- Mots & textes modifiables (admin) ----------
    Source de vérité partagée par tous les joueurs.
@@ -24,9 +24,17 @@ const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_SNIPPETS } = require(
    garde simplement le fichier — rien ne change. */
 const WORDS_FILE = path.join(__dirname, "words-data.json");
 const ADMIN_PASSWORD = "azerty";
-const WORDS = { common: [...COMMON_WORDS], hard: [...HARD_WORDS], speed: [...SPEED_WORDS], texts: [...TEXTS], code: [...(CODE_SNIPPETS || [])] };
+const WORDS = {
+  common: [...COMMON_WORDS], hard: [...HARD_WORDS], speed: [...SPEED_WORDS], texts: [...TEXTS],
+  // mode « code » découpé en sous-catégories
+  codeweb: [...(CODE_WEB || [])], codejava: [...(CODE_JAVA || [])], codecpp: [...(CODE_CPP || [])],
+};
 // Les listes gérables par l'admin (et sauvegardées).
-const LIST_KEYS = ["common", "hard", "speed", "texts", "code"];
+const LIST_KEYS = ["common", "hard", "speed", "texts", "codeweb", "codejava", "codecpp"];
+// Listes « une entrée = une ligne entière » (textes + code) : pas de découpage en mots.
+const LINE_LISTS = ["texts", "codeweb", "codejava", "codecpp"];
+// Catégories de code valides (clé courte) pour le classement par catégorie.
+const CODE_CATS = ["web", "java", "cpp"];
 
 // Stockage en ligne (optionnel) — actif seulement si les 2 variables existent.
 const STORE_URL = process.env.UPSTASH_REDIS_REST_URL || "";
@@ -174,14 +182,15 @@ function emptyProfile(name) {
     bestWpm: 0, bestMode: null,
     modes: {},   // mode -> { count, sumWpm, sumAcc, bestWpm }
     texts: {},   // textId -> { count, sumWpm, sumAcc, bestWpm, preview }  (mode « texte » : un classement par texte)
+    codeCats: {},// catégorie -> { count, sumWpm, sumAcc, bestWpm }  (mode « code » : web / java / cpp)
     runs: [],    // { t, mode, wpm, acc, chars, timeMs }
   };
 }
 
 // Enregistre une partie terminée. Renvoie le profil mis à jour (ou null si
-// la partie est trop courte/invalide pour compter). `textId`/`textPreview` ne
-// servent qu'au mode « texte » (pour un classement séparé par texte).
-function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview }) {
+// la partie est trop courte/invalide pour compter). `textId`/`textPreview`
+// servent au mode « texte » ; `codeCat` au mode « code » (classement par catégorie).
+function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview, codeCat }) {
   if (!SCORE_MODES.includes(mode)) return null;
   const key = cleanName(name);
   if (isBanned(key)) return null;            // pseudo banni → on n'enregistre rien
@@ -193,6 +202,7 @@ function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview 
   if (wpm > MAX_HUMAN_WPM) return null;       // vitesse impossible → soupçon de bot, ignoré
   textId = (textId || "").toString().slice(0, 40);
   textPreview = (textPreview || "").toString().slice(0, 80);
+  codeCat = CODE_CATS.includes(codeCat) ? codeCat : null;
 
   let p = SCORES.players[key];
   if (!p) {
@@ -223,6 +233,13 @@ function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview 
     tx.count++; tx.sumWpm += wpm; tx.sumAcc += acc; if (wpm > tx.bestWpm) tx.bestWpm = wpm;
     if (textPreview) tx.preview = textPreview;
   }
+  // Mode « code » : bilan PAR catégorie (web / java / cpp) — classement séparé.
+  if (mode === "code" && codeCat) {
+    if (!p.codeCats) p.codeCats = {};
+    let cc = p.codeCats[codeCat];
+    if (!cc) { cc = { count: 0, sumWpm: 0, sumAcc: 0, bestWpm: 0 }; p.codeCats[codeCat] = cc; }
+    cc.count++; cc.sumWpm += wpm; cc.sumAcc += acc; if (wpm > cc.bestWpm) cc.bestWpm = wpm;
+  }
 
   p.runs.push({ t: Date.now(), mode, wpm, acc, chars, timeMs });
   if (p.runs.length > RUNS_KEPT) p.runs.splice(0, p.runs.length - RUNS_KEPT);
@@ -232,17 +249,21 @@ function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview 
 }
 
 // Construit le tableau du classement, trié (record décroissant).
-//   mode   : "tous" (record toutes catégories) ou un mode précis ;
-//   textId : si fourni avec mode "texte", classement d'UN texte précis.
-function leaderboard(mode, textId) {
+//   mode : "tous" (record toutes catégories) ou un mode précis ;
+//   sub  : sous-filtre — un texte précis (mode "texte") ou une catégorie de
+//          code web/java/cpp (mode "code").
+function leaderboard(mode, sub) {
   const list = [];
   for (const p of Object.values(SCORES.players)) {
     let src = null;
     if (mode === "tous") {
       if (p.count > 0) src = { bestWpm: p.bestWpm, bestMode: p.bestMode, sumWpm: p.sumWpm, sumAcc: p.sumAcc, count: p.count };
-    } else if (mode === "texte" && textId) {
-      const tx = p.texts && p.texts[textId];
+    } else if (mode === "texte" && sub) {
+      const tx = p.texts && p.texts[sub];
       if (tx && tx.count > 0) src = { bestWpm: tx.bestWpm, bestMode: "texte", sumWpm: tx.sumWpm, sumAcc: tx.sumAcc, count: tx.count };
+    } else if (mode === "code" && sub) {
+      const cc = p.codeCats && p.codeCats[sub];
+      if (cc && cc.count > 0) src = { bestWpm: cc.bestWpm, bestMode: "code", sumWpm: cc.sumWpm, sumAcc: cc.sumAcc, count: cc.count };
     } else {
       const m = p.modes[mode];
       if (m && m.count > 0) src = { bestWpm: m.bestWpm, bestMode: mode, sumWpm: m.sumWpm, sumAcc: m.sumAcc, count: m.count };
@@ -432,10 +453,10 @@ const server = http.createServer((req, res) => {
         const value = normalizeTypography(msg.value).trim();
         if (!value) {
           message = "rien à ajouter";
-        } else if (listName === "texts" || listName === "code") {
+        } else if (LINE_LISTS.includes(listName)) {
           // texte / ligne de code = une entrée complète (on ne découpe pas)
           if (WORDS[listName].includes(value)) message = "cette entrée existe déjà";
-          else { WORDS[listName].push(value); changed = true; message = listName === "code" ? "ligne ajoutée ✓" : "texte ajouté ✓"; }
+          else { WORDS[listName].push(value); changed = true; message = listName === "texts" ? "texte ajouté ✓" : "ligne ajoutée ✓"; }
         } else {
           // mots : on accepte plusieurs mots séparés par des espaces ; anti-doublon
           let added = 0, dup = 0;
@@ -481,15 +502,18 @@ const server = http.createServer((req, res) => {
   // Le tableau du classement (trié), filtrable par mode (?mode=tous|mots|…) et,
   // pour le mode « texte », par texte précis (?text=<identifiant>).
   if (urlPath === "/api/leaderboard" && req.method === "GET") {
-    let mode = "tous", textId = "";
+    let mode = "tous", textId = "", cat = "";
     try {
       const sp = new URL(req.url, "http://x").searchParams;
       mode = sp.get("mode") || "tous";
       textId = (sp.get("text") || "").slice(0, 40);
+      cat = (sp.get("cat") || "").slice(0, 8);
     } catch {}
     if (mode !== "tous" && !SCORE_MODES.includes(mode)) mode = "tous";
     if (mode !== "texte") textId = "";
-    return sendJson(res, 200, { mode, text: textId || null, players: leaderboard(mode, textId) });
+    if (mode !== "code" || !CODE_CATS.includes(cat)) cat = "";
+    const sub = mode === "code" ? cat : textId; // sous-filtre selon le mode
+    return sendJson(res, 200, { mode, text: textId || null, cat: cat || null, players: leaderboard(mode, sub) });
   }
   // Le profil détaillé d'un joueur (stats + historique pour les courbes).
   if (urlPath === "/api/profile" && req.method === "GET") {
@@ -507,7 +531,7 @@ const server = http.createServer((req, res) => {
       const p = recordScore({
         name: msg.name, mode: msg.mode,
         wpm: msg.wpm, acc: msg.accuracy, chars: msg.chars, timeMs: msg.timeMs,
-        textId: msg.textId, textPreview: msg.textPreview,
+        textId: msg.textId, textPreview: msg.textPreview, codeCat: msg.codeCat,
       });
       if (!p) return sendJson(res, 200, { ok: true, recorded: false });
       const { rank, total } = rankOf(p.name);
