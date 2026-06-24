@@ -44,6 +44,10 @@
           <span class="card-title">speed</span>
           <span class="card-desc">mots simples sans accents — tape le plus vite possible</span>
         </button>
+        <button class="card" data-go="solo-code">
+          <span class="card-title">code &lt;/&gt;</span>
+          <span class="card-desc">tape de vraies lignes de code le plus vite possible</span>
+        </button>
         <button class="card card-board" data-go="leaderboard">
           <span class="card-title">🏆 classement</span>
           <span class="card-desc">tes statistiques, tes records et tes courbes de progression</span>
@@ -147,6 +151,25 @@
       <p class="hint">Mots simples, sans accents. Tape vite ! <kbd>Tab</kbd> pour recommencer.</p>
     </section>
 
+    <!-- ====================== SOLO : CODE ====================== -->
+    <section class="screen" id="screen-solo-code">
+      <div class="options" id="code-options">
+        <span class="opt-label">durée</span>
+        <button class="opt" data-dur="15">15s</button>
+        <button class="opt active" data-dur="30">30s</button>
+        <button class="opt" data-dur="60">60s</button>
+        <button class="opt" data-dur="120">120s</button>
+      </div>
+      <div class="stats-live">
+        <span id="code-timer">30</span>
+        <span id="code-wpm">0 mpm</span>
+      </div>
+      <div class="typing text-mode" id="code-typing" tabindex="0">
+        <div class="words" id="code-stream"></div>
+      </div>
+      <p class="hint">De vraies lignes de code. Tape vite ! <kbd>Tab</kbd> pour recommencer.</p>
+    </section>
+
     <!-- ====================== RÉSULTAT SOLO ====================== -->
     <section class="screen" id="screen-result">
       <div class="result">
@@ -195,6 +218,7 @@
           <button class="opt" data-lbmode="zen">zen</button>
           <button class="opt" data-lbmode="difficile">difficile</button>
           <button class="opt" data-lbmode="speed">speed</button>
+          <button class="opt" data-lbmode="code">code</button>
         </div>
         <div class="lb-text-filter hidden" id="lb-text-filter">
           <span class="opt-label">texte</span>
@@ -362,22 +386,38 @@
         <p class="admin-error" id="admin-error"></p>
       </div>
 
-      <!-- étape 2 : gestion des listes -->
+      <!-- étape 2 : gestion -->
       <div id="admin-panel" class="hidden">
         <div class="mode-pick admin-tabs" id="admin-tabs">
           <button class="opt active" data-list="common">mots courants</button>
           <button class="opt" data-list="hard">difficile</button>
           <button class="opt" data-list="speed">speed</button>
+          <button class="opt" data-list="code">code</button>
           <button class="opt" data-list="texts">textes</button>
+          <button class="opt" data-list="players">joueurs</button>
         </div>
-        <p class="admin-hint" id="admin-list-hint"></p>
-        <div class="admin-add">
-          <textarea id="admin-input" rows="1" placeholder="…"></textarea>
-          <button class="btn" id="admin-add-btn">ajouter</button>
+
+        <!-- vue : listes de mots / textes / code -->
+        <div id="admin-lists-view">
+          <p class="admin-hint" id="admin-list-hint"></p>
+          <div class="admin-add">
+            <textarea id="admin-input" rows="1" placeholder="…"></textarea>
+            <button class="btn" id="admin-add-btn">ajouter</button>
+          </div>
+          <input type="search" id="admin-search" class="admin-search" placeholder="🔍 rechercher…" autocomplete="off" />
+          <div class="admin-count" id="admin-count"></div>
+          <div class="admin-list" id="admin-list"></div>
         </div>
-        <input type="search" id="admin-search" class="admin-search" placeholder="🔍 rechercher…" autocomplete="off" />
-        <div class="admin-count" id="admin-count"></div>
-        <div class="admin-list" id="admin-list"></div>
+
+        <!-- vue : gestion des joueurs (classement) -->
+        <div id="admin-players-view" class="hidden">
+          <p class="admin-hint">Gère les joueurs du classement : supprime un score ou bannis un pseudo (il ne pourra plus enregistrer de score ni jouer en multi).</p>
+          <input type="search" id="admin-players-search" class="admin-search" placeholder="🔍 chercher un pseudo…" autocomplete="off" />
+          <div class="admin-players-banned" id="admin-banned"></div>
+          <div class="admin-count" id="admin-players-count"></div>
+          <div class="admin-list" id="admin-players-list"></div>
+        </div>
+
         <p class="admin-status" id="admin-status"></p>
       </div>
     </div>

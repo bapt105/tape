@@ -97,6 +97,40 @@ const TEXTS = [
   "Il pleuvait depuis le matin, une pluie fine et régulière qui lavait les toits et les trottoirs. Derrière la vitre, l'enfant suivait du doigt les gouttes qui glissaient en traçant des chemins. Dehors, le monde paraissait plus doux, plus lent, presque endormi."
 ];
 
+// Lignes de code pour le mode « code » : on tape de vraies lignes de programmation.
+// Chaque entrée est découpée en « jetons » séparés par des espaces, tapés l'un
+// après l'autre comme des mots.
+const CODE_SNIPPETS = [
+  "const sum = (a, b) => a + b;",
+  "let total = 0;",
+  "for (let i = 0; i < n; i++) {",
+  "if (x > 0) { return true; }",
+  "function greet(name) { return `Hi ${name}`; }",
+  "console.log(\"Hello, world!\");",
+  "const arr = [1, 2, 3].map(x => x * 2);",
+  "return items.filter(i => i.active);",
+  "while (i < len) { i += 1; }",
+  "const { id, name } = user;",
+  "import React from \"react\";",
+  "export default function App() {}",
+  "try { run(); } catch (e) { log(e); }",
+  "arr.forEach((item) => print(item));",
+  "const obj = { x: 1, y: 2 };",
+  "if (a === b && c !== d) doThing();",
+  "def factorial(n): return n * factorial(n - 1)",
+  "for x in range(0, 10): print(x)",
+  "data = [row for row in rows if row.ok]",
+  "public static void main(String[] args) {}",
+  "System.out.println(\"done\");",
+  "int[] nums = new int[10];",
+  "SELECT * FROM users WHERE age > 18;",
+  "git commit -m \"fix: typo\"",
+  "npm install --save-dev eslint",
+  "const res = await fetch(url).then(r => r.json());",
+  "x = (y > 0) ? 1 : -1;",
+  "ptr->next = head; head = ptr;",
+];
+
 // Nombre de textes (utilisé par le serveur pour synchroniser les courses)
 const TEXTS_COUNT = TEXTS.length;
 
@@ -127,7 +161,24 @@ function generateWords(count, seed) { return pickWords(COMMON_WORDS, count, seed
 function generateHardWords(count, seed) { return pickWords(HARD_WORDS, count, seed); }
 function generateSpeedWords(count, seed) { return pickWords(SPEED_WORDS, count, seed); }
 
+// Mode « code » : on enchaîne des lignes de code entières (et non des mots isolés)
+// jusqu'à obtenir au moins `count` jetons à taper.
+function generateCode(count, seed) {
+  const list = (typeof CODE_SNIPPETS !== "undefined" && CODE_SNIPPETS.length) ? CODE_SNIPPETS : ["code"];
+  const rng = seed === undefined ? Math.random : mulberry32(seed);
+  const out = [];
+  let tokens = 0, last = -1;
+  while (tokens < count) {
+    let idx;
+    do { idx = Math.floor(rng() * list.length); } while (idx === last && list.length > 1);
+    last = idx;
+    out.push(list[idx]);
+    tokens += list[idx].split(/\s+/).filter(Boolean).length;
+  }
+  return out.join(" ");
+}
+
 // Expose pour le navigateur et pour Node (serveur).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, TEXTS_COUNT, generateWords, generateHardWords, generateSpeedWords, mulberry32 };
+  module.exports = { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_SNIPPETS, TEXTS_COUNT, generateWords, generateHardWords, generateSpeedWords, generateCode, mulberry32 };
 }

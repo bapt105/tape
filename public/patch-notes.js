@@ -30,6 +30,9 @@ const PATCH_NOTES = [
       "Nouveau : des SALONS PUBLICS — choisis « public » à la création et ton salon apparaît dans une liste où tout le monde peut te rejoindre en un clic (ou reste « privé » sur code).",
       "Anti-triche en course : arriver au bout en tapant n'importe quoi ne fait plus gagner — il faut vraiment avoir tapé le texte (sinon l'arrivée est « non valide »).",
       "À l'import d'un texte (admin), les apostrophes « courbes » deviennent des apostrophes simples ', les « … » deviennent ... et les guillemets/tirets sont uniformisés — pour que tout reste facile à taper.",
+      "Nouveau mode solo : « code </> » — tape de vraies lignes de code le plus vite possible (compte aussi pour le classement).",
+      "Anti-bot renforcé : le texte affiché est brouillé dans le code de la page (un bot qui lit les mots via l'inspecteur ne récupère que du charabia), et un score à vitesse impossible (> 250 mpm) est ignoré et ne gagne pas.",
+      "Admin : nouvel onglet « joueurs » pour supprimer le score d'un pseudo ou bannir quelqu'un (il ne peut plus enregistrer de score ni jouer en multijoueur).",
     ],
   },
   {

@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/29163819/README.md)
 # tape_ — jeu de dactylographie minimaliste
 
 Un petit site de dactylographie en français, épuré.
@@ -62,11 +61,15 @@ Ouvre **http://localhost:3000** dans ton navigateur. 🎉
 - **Zen** — sans chrono : finis un nombre de mots à ton rythme.
 - **Difficile** — mots compliqués, pleins d'accents.
 - **Speed** — mots **simples et sans accents** : tape le plus vite possible.
+- **Code** `</>` — de vraies **lignes de code** (toutes langues) à taper le plus vite possible.
 
 `Tab` recommence une partie. `◐` en haut à droite change le thème clair/sombre.
 
 ### Multijoueur (2 à 8 joueurs)
 - **Course** — tout le monde tape **le même texte** (ou des mots). Le premier à finir gagne.
+  ⚠️ Pour gagner, il faut **vraiment avoir tapé le texte** : arriver au bout en
+  tapant n'importe quoi (trop de fautes / presque rien de correct) donne une
+  arrivée **« non valide »** qui ne gagne pas et ne compte pas au classement.
 - **Élimination** — manches de 18 s. À chaque manche, **le joueur le plus lent est éliminé**.
 - **Patate chaude** — une bombe passe de joueur en joueur ; celui qui la tient quand elle explose perd une vie.
 - **Difficile** — comme la course, mais avec des mots à accents.
@@ -74,11 +77,22 @@ Ouvre **http://localhost:3000** dans ton navigateur. 🎉
 
 Dans le **salon**, un **chat** permet de discuter avant de lancer la partie.
 
+**Salons publics ou privés.** À la création d'un salon, tu choisis sa **visibilité** :
+- **public** → ton salon apparaît dans la **liste des salons publics** (sur l'écran
+  multijoueur) ; n'importe qui peut le rejoindre **en un clic**, sans connaître le code.
+- **privé** → il n'apparaît nulle part ; on ne peut le rejoindre **qu'avec le code**
+  à 4 lettres que tu partages.
+
+La liste des salons publics se met à jour toute seule (bouton **↻ rafraîchir** pour
+forcer). Un salon disparaît de la liste dès que la partie démarre ou qu'il est plein.
+
 ### Classement (🏆)
 Accessible par le bouton **« classement »** (en haut, ou la carte sur l'accueil).
 
 - **Choisis un pseudo** une seule fois : toutes tes parties **solo** terminées sont
-  alors enregistrées automatiquement sous ce pseudo.
+  alors enregistrées automatiquement sous ce pseudo. Les parties **multijoueur**
+  de type course / difficile / speed (où chacun finit avec un vrai score) comptent
+  aussi.
 - **Onglet « classement »** — le tableau de tous les joueurs, trié par **record**,
   avec aussi la **moyenne**, le **nombre de parties** et la **précision**. Tu peux
   le filtrer par mode (mots, texte, zen, difficile, speed). En mode **texte**, un
@@ -243,8 +257,21 @@ donnes 2 clés. **C'est gratuit et sans carte bancaire.** Étapes :
   encore été ajouté via l'admin.
 - **Ajouter/retirer en direct** → bouton **admin** en bas du site (mot de passe
   dans `server.js`, variable `ADMIN_PASSWORD`). Onglets : mots courants, difficile,
-  **speed**, textes. C'est ce qui est sauvegardé (fichier en local, et stockage
-  Upstash en ligne — voir section 4).
+  **speed**, **code**, textes, et **joueurs**. C'est ce qui est sauvegardé (fichier
+  en local, et stockage Upstash en ligne — voir section 4).
+- **Modérer les joueurs** → onglet **« joueurs »** de l'admin : **supprimer le
+  score** d'un pseudo, ou le **bannir** (il ne pourra plus enregistrer de score
+  ni jouer en multijoueur ; un bouton « débannir » annule).
+- **Anti-triche** → le texte affiché est **brouillé dans le code de la page**
+  (un bot qui lit les mots via l'inspecteur ne récupère que du charabia) et un
+  score à **vitesse impossible** (au-delà de `MAX_HUMAN_WPM` dans `server.js`,
+  250 mpm par défaut) est **ignoré** et ne gagne pas. ⚠️ Aucun jeu de frappe
+  n'est inviolable à 100 % (le navigateur doit connaître le texte pour l'afficher),
+  mais ces mesures cassent les bots simples et protègent le classement.
+  > **Import propre :** quand tu colles un texte (depuis Word, le web…), les
+  > caractères « jolis » mais impossibles à taper sont **uniformisés
+  > automatiquement** : apostrophes courbes `’` → `'`, points de suspension
+  > `…` → `...`, guillemets `“ ”` → `"`, tirets longs `— –` → `-`.
 - **Annoncer une nouveauté** → ajoute un bloc en haut de `public/patch-notes.js`
   (le mode d'emploi est écrit dans le fichier). Il apparaît via le bouton
   **« ✨ nouveautés »** en bas du site.

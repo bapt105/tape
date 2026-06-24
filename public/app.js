@@ -75,21 +75,42 @@ function createEngine(typingEl) {
     words.forEach((_, i) => paintWord(i));
     updateCaret();
   }
+  // Renvoie une COPIE mélangée d'un tableau (mélange de Fisher-Yates).
+  function shuffled(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+    }
+    return a;
+  }
   function paintWord(i) {
     const el = wordEls[i], w = words[i], t = input[i] || "";
-    let html = "";
-    for (let j = 0; j < w.length; j++) {
-      let cls = "l";
-      if (j < t.length) cls += t[j] === w[j] ? " correct" : " wrong";
-      html += `<span class="${cls}">${esc(w[j])}</span>`;
+    const total = Math.max(w.length, t.length);
+    const spans = [];
+    for (let j = 0; j < total; j++) {
+      const span = document.createElement("span");
+      let cls = "l", ch;
+      if (j < w.length) {
+        ch = w[j];
+        if (j < t.length) cls += t[j] === w[j] ? " correct" : " wrong";
+      } else { ch = t[j]; cls += " extra"; }
+      span.className = cls;
+      span.textContent = ch;          // textContent = échappement auto (sûr pour le code)
+      span.style.order = j;           // ordre VISUEL correct (flexbox)…
+      spans.push(span);
     }
-    for (let j = w.length; j < t.length; j++) html += `<span class="l extra">${esc(t[j])}</span>`;
-    el.innerHTML = html;
+    el._spans = spans; // ordre LOGIQUE (pour le curseur)
+    // …mais on insère les lettres dans le DOM dans un ordre MÉLANGÉ : un bot qui
+    // lit le texte via l'inspecteur (textContent/innerText) ne récupère que du
+    // charabia, alors que le joueur voit le mot correctement.
+    el.textContent = "";
+    for (const span of shuffled(spans)) el.appendChild(span);
   }
   function updateCaret() {
     if (!caretEl || !wordEls[cur]) return;
     const wordEl = wordEls[cur];
-    const spans = wordEl.querySelectorAll(".l");
+    const spans = wordEl._spans || []; // ordre logique (le DOM, lui, est mélangé)
     const li = (input[cur] || "").length;
     // offsetLeft/Top des lettres sont relatifs à .words (seul parent positionné)
     let left, top, h;
@@ -142,7 +163,7 @@ function createEngine(typingEl) {
       paintWord(cur);
       // petit saut de la lettre quand elle est correcte
       if (k === expected) {
-        const span = wordEls[cur].children[input[cur].length - 1];
+        const span = (wordEls[cur]._spans || [])[input[cur].length - 1];
         if (span) span.classList.add("pop");
       }
       updateCaret();
@@ -415,6 +436,41 @@ $$("#speed-options .opt").forEach((b) =>
 );
 onEnter["solo-speed"] = () => { setupSpeed(); setTimeout(() => speedEngine.focus(), 30); };
 
+/* ============================================================
+   SOLO — CODE (chrono, vraies lignes de code)
+   ============================================================ */
+const codeEngine = createEngine($("#code-typing"));
+let codeDuration = 30, codeTimer = null, codeTick = null;
+
+function setupCode() {
+  const enough = Math.max(30, Math.round(codeDuration * 2.5)); // jetons de code = plus longs
+  codeEngine.load(generateCode(enough), { finite: false });
+  $("#code-timer").textContent = codeDuration;
+  $("#code-wpm").textContent = "0 mpm";
+  clearInterval(codeTick); clearTimeout(codeTimer);
+}
+codeEngine.on({
+  start() {
+    codeTick = setInterval(() => {
+      const s = codeEngine.stats();
+      $("#code-timer").textContent = Math.max(0, codeDuration - Math.floor(s.elapsedMs / 1000));
+      $("#code-wpm").textContent = s.wpm + " mpm";
+    }, 100);
+    codeTimer = setTimeout(() => { clearInterval(codeTick); codeEngine.forceFinish(); }, codeDuration * 1000);
+  },
+  progress(s) { $("#code-wpm").textContent = s.wpm + " mpm"; },
+  finish(s) { clearInterval(codeTick); clearTimeout(codeTimer); showResult({ ...s, elapsedMs: codeDuration * 1000 }, "code"); },
+});
+$$("#code-options .opt").forEach((b) =>
+  b.addEventListener("click", () => {
+    $$("#code-options .opt").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    codeDuration = +b.dataset.dur;
+    setupCode(); codeEngine.focus();
+  })
+);
+onEnter["solo-code"] = () => { setupCode(); setTimeout(() => codeEngine.focus(), 30); };
+
 /* ---------- Tab = recommencer (sur écrans solo) ---------- */
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Tab") return;
@@ -423,6 +479,7 @@ document.addEventListener("keydown", (e) => {
   else if (currentScreen === "solo-zen") { e.preventDefault(); setupZen(); zenEngine.focus(); }
   else if (currentScreen === "solo-hard") { e.preventDefault(); setupHard(); hardEngine.focus(); }
   else if (currentScreen === "solo-speed") { e.preventDefault(); setupSpeed(); speedEngine.focus(); }
+  else if (currentScreen === "solo-code") { e.preventDefault(); setupCode(); codeEngine.focus(); }
 });
 
 /* ============================================================
@@ -1038,6 +1095,7 @@ function applyWordData(data) {
   if (Array.isArray(data.hard)   && data.hard.length)   { HARD_WORDS.length = 0;   HARD_WORDS.push(...data.hard); }
   if (Array.isArray(data.speed)  && data.speed.length)  { SPEED_WORDS.length = 0;  SPEED_WORDS.push(...data.speed); }
   if (Array.isArray(data.texts)  && data.texts.length)  { TEXTS.length = 0;        TEXTS.push(...data.texts); }
+  if (Array.isArray(data.code)   && data.code.length)   { CODE_SNIPPETS.length = 0; CODE_SNIPPETS.push(...data.code); }
 }
 
 // Récupère les listes depuis le serveur au chargement de la page.
@@ -1057,17 +1115,20 @@ function refreshCurrentSolo() {
   else if (currentScreen === "solo-speed") setupSpeed();
   else if (currentScreen === "solo-zen") setupZen();
   else if (currentScreen === "solo-text") setupText();
+  else if (currentScreen === "solo-code") setupCode();
 }
 
 const adminOverlay = $("#admin-overlay");
 let adminPassword = "";                                  // mémorisé après connexion réussie
 let adminList = "common";                                // liste active dans le panneau
 let adminSearch = "";                                    // texte de recherche (filtre la liste)
-let adminData = { common: [], hard: [], speed: [], texts: [] };     // dernières listes connues
+let adminData = { common: [], hard: [], speed: [], texts: [], code: [] };     // dernières listes connues
+const LINE_LISTS = ["texts", "code"]; // listes « une entrée = une ligne entière »
 const ADMIN_META = {
   common: { hint: "Mots du mode « mots courants » (aussi patate chaude et élimination). Tu peux en ajouter plusieurs séparés par des espaces.", ph: "ex : bonjour maison soleil" },
   hard:   { hint: "Mots du mode « difficile ». Plusieurs mots possibles, séparés par des espaces.", ph: "ex : anticonstitutionnellement" },
   speed:  { hint: "Mots du mode « speed » : simples et SANS accent. Plusieurs possibles, séparés par des espaces.", ph: "ex : maison velo jardin" },
+  code:   { hint: "Lignes de code du mode « code ». Une ligne complète par entrée. Modifie une ligne dans son cadre puis « enregistrer ».", ph: "ex : const x = 5;" },
   texts:  { hint: "Textes du mode « texte ». Modifie un texte directement dans son cadre puis « enregistrer ».", ph: "Colle ici un nouveau texte complet…" },
 };
 
@@ -1119,7 +1180,7 @@ function renderAdminList() {
   const all = adminData[adminList] || [];
   const q = adminSearch.trim().toLowerCase();
   const items = q ? all.filter((v) => v.toLowerCase().includes(q)) : all;
-  const unit = adminList === "texts" ? "texte(s)" : "mot(s)";
+  const unit = adminList === "texts" ? "texte(s)" : adminList === "code" ? "ligne(s)" : "mot(s)";
   $("#admin-count").textContent = q
     ? `${items.length} affiché(s) sur ${all.length} ${unit}`
     : `${all.length} ${unit}`;
@@ -1132,7 +1193,7 @@ function renderAdminList() {
     wrap.appendChild(empty);
     return;
   }
-  items.forEach((val) => wrap.appendChild(adminList === "texts" ? buildTextItem(val) : buildWordItem(val)));
+  items.forEach((val) => wrap.appendChild(LINE_LISTS.includes(adminList) ? buildTextItem(val) : buildWordItem(val)));
 }
 
 // Un mot : libellé + bouton supprimer
@@ -1219,12 +1280,86 @@ $$("#admin-tabs .opt").forEach((b) =>
   b.addEventListener("click", () => {
     $$("#admin-tabs .opt").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
-    adminList = b.dataset.list;
+    const tab = b.dataset.list;
+    const playersTab = tab === "players";
+    // bascule entre la vue « listes » et la vue « joueurs »
+    $("#admin-lists-view").classList.toggle("hidden", playersTab);
+    $("#admin-players-view").classList.toggle("hidden", !playersTab);
+    if (playersTab) { adminPlayersSearch = ""; $("#admin-players-search").value = ""; loadAdminPlayers(); return; }
+    adminList = tab;
     $("#admin-input").value = "";
     adminSearch = ""; $("#admin-search").value = ""; // la recherche repart à zéro par onglet
     renderAdminList();
   })
 );
+
+/* ----- Admin : gestion des joueurs (bannir / supprimer un score) ----- */
+let adminPlayers = [], adminBanned = [], adminPlayersSearch = "";
+
+async function loadAdminPlayers() {
+  $("#admin-players-list").innerHTML = '<p class="admin-empty">chargement…</p>';
+  const { ok, data } = await adminRequest({ password: adminPassword, action: "players" });
+  if (!ok) { $("#admin-players-list").innerHTML = `<p class="admin-empty">${escapeText(data.error || "erreur")}</p>`; return; }
+  adminPlayers = data.players || [];
+  adminBanned = data.banned || [];
+  renderAdminPlayers();
+}
+function renderAdminPlayers() {
+  // bannis (en haut, avec bouton « débannir »)
+  const bannedWrap = $("#admin-banned");
+  if (adminBanned.length) {
+    bannedWrap.innerHTML = `<div class="admin-banned-title">bannis (${adminBanned.length})</div>`;
+    adminBanned.forEach((name) => {
+      const row = document.createElement("div");
+      row.className = "admin-player banned";
+      row.innerHTML = `<span class="ap-name">🚫 ${escapeText(name)}</span>`;
+      const btn = document.createElement("button");
+      btn.className = "btn ap-unban"; btn.textContent = "débannir";
+      btn.addEventListener("click", () => adminModerate("unban", name));
+      row.appendChild(btn);
+      bannedWrap.appendChild(row);
+    });
+  } else bannedWrap.innerHTML = "";
+
+  // liste des joueurs (filtrée par recherche)
+  const q = adminPlayersSearch.trim().toLowerCase();
+  const items = q ? adminPlayers.filter((p) => p.name.toLowerCase().includes(q)) : adminPlayers;
+  $("#admin-players-count").textContent = q
+    ? `${items.length} affiché(s) sur ${adminPlayers.length} joueur(s)`
+    : `${adminPlayers.length} joueur(s) au classement`;
+  const wrap = $("#admin-players-list");
+  wrap.innerHTML = "";
+  if (!items.length) {
+    wrap.innerHTML = `<p class="admin-empty">${q ? "aucun joueur trouvé" : "aucun joueur au classement"}</p>`;
+    return;
+  }
+  items.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "admin-player";
+    row.innerHTML = `<span class="ap-name">${escapeText(p.name)}</span>
+      <span class="ap-stat">${p.bestWpm} mpm · ${p.count} partie(s)</span>`;
+    const actions = document.createElement("span");
+    actions.className = "ap-actions";
+    const del = document.createElement("button");
+    del.className = "btn ap-del"; del.textContent = "suppr. score";
+    del.addEventListener("click", () => adminModerate("deleteScore", p.name));
+    const ban = document.createElement("button");
+    ban.className = "btn ap-ban"; ban.textContent = "bannir";
+    ban.addEventListener("click", () => { if (confirm(`Bannir « ${p.name} » ? Son score sera supprimé et il ne pourra plus jouer en multi.`)) adminModerate("ban", p.name); });
+    actions.appendChild(del); actions.appendChild(ban);
+    row.appendChild(actions);
+    wrap.appendChild(row);
+  });
+}
+async function adminModerate(action, name) {
+  const { ok, data } = await adminRequest({ password: adminPassword, action, name });
+  if (!ok) { adminStatus(data.error || "erreur", true); return; }
+  adminPlayers = data.players || [];
+  adminBanned = data.banned || [];
+  renderAdminPlayers();
+  adminStatus(data.message || "fait ✓");
+}
+$("#admin-players-search").addEventListener("input", (e) => { adminPlayersSearch = e.target.value; renderAdminPlayers(); });
 
 /* ============================================================
    NOUVEAUTÉS (patch notes)
@@ -1313,8 +1448,8 @@ $("#chat-form").addEventListener("submit", (e) => {
    ============================================================ */
 
 // Les 5 modes solo, avec leur libellé lisible.
-const MODE_LABELS = { mots: "mots courants", texte: "texte", zen: "zen", difficile: "difficile", speed: "speed" };
-const SOLO_MODES = ["mots", "texte", "zen", "difficile", "speed"];
+const MODE_LABELS = { mots: "mots courants", texte: "texte", zen: "zen", difficile: "difficile", speed: "speed", code: "code" };
+const SOLO_MODES = ["mots", "texte", "zen", "difficile", "speed", "code"];
 
 // Convertit le libellé d'un résultat solo en clé de mode pour le classement.
 function labelToMode(label) {
@@ -1322,6 +1457,7 @@ function labelToMode(label) {
     : label === "zen" ? "zen"
     : label === "difficile" ? "difficile"
     : label === "speed" ? "speed"
+    : label === "code" ? "code"
     : "mots"; // "mots courants"
 }
 

@@ -8,7 +8,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
-const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS } = require("./public/words.js");
+const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS, CODE_SNIPPETS } = require("./public/words.js");
 
 /* ---------- Mots & textes modifiables (admin) ----------
    Source de vérité partagée par tous les joueurs.
@@ -24,9 +24,9 @@ const { COMMON_WORDS, HARD_WORDS, SPEED_WORDS, TEXTS } = require("./public/words
    garde simplement le fichier — rien ne change. */
 const WORDS_FILE = path.join(__dirname, "words-data.json");
 const ADMIN_PASSWORD = "azerty";
-const WORDS = { common: [...COMMON_WORDS], hard: [...HARD_WORDS], speed: [...SPEED_WORDS], texts: [...TEXTS] };
+const WORDS = { common: [...COMMON_WORDS], hard: [...HARD_WORDS], speed: [...SPEED_WORDS], texts: [...TEXTS], code: [...(CODE_SNIPPETS || [])] };
 // Les listes gérables par l'admin (et sauvegardées).
-const LIST_KEYS = ["common", "hard", "speed", "texts"];
+const LIST_KEYS = ["common", "hard", "speed", "texts", "code"];
 
 // Stockage en ligne (optionnel) — actif seulement si les 2 variables existent.
 const STORE_URL = process.env.UPSTASH_REDIS_REST_URL || "";
@@ -95,7 +95,7 @@ async function persist() {
 //   - espace insécable                                       →  espace normal
 function normalizeTypography(s) {
   return (s || "").toString()
-    .replace(/[‘’‚‛′ʼ´`]/g, "'") // ' ' ‚ ‛ ′ ʼ ´ ` → '
+    .replace(/[‘’‚‛′ʼ]/g, "'") // apostrophes courbes → ' (PAS le backtick ` : code)
     .replace(/[“”„″]/g, '"')                          // " " „ ″ → "
     .replace(/…/g, "...")                                            // … → ...
     .replace(/[–—]/g, "-")                                      // – — → -
@@ -146,10 +146,14 @@ function dedupeAll() {
    ============================================================ */
 const SCORES_FILE = path.join(__dirname, "scores-data.json");
 const SCORES_STORE_KEY = "tape:scores";
-const SCORE_MODES = ["mots", "texte", "zen", "difficile", "speed"];
+const SCORE_MODES = ["mots", "texte", "zen", "difficile", "speed", "code"];
 const RUNS_KEPT = 100;           // nb de parties gardées par joueur (pour les courbes)
 const MAX_PROFILES = 500;        // garde-fou : nb max de profils conservés
-const SCORES = { players: {} };  // pseudo -> profil
+// Anti-bot : au-dessus de cette vitesse (mpm), c'est humainement impossible →
+// le score n'est pas enregistré et l'arrivée ne peut pas gagner. (Le record du
+// monde tient ~210-220 sur de courts éclairs ; 250 laisse les humains tranquilles.)
+const MAX_HUMAN_WPM = 250;
+const SCORES = { players: {}, banned: [] }; // profils + liste des pseudos bannis
 
 // Borne un nombre dans [min, max] (et remplace les valeurs invalides par `dflt`).
 function clampNum(v, min, max, dflt = 0) {
@@ -179,15 +183,17 @@ function emptyProfile(name) {
 // servent qu'au mode « texte » (pour un classement séparé par texte).
 function recordScore({ name, mode, wpm, acc, chars, timeMs, textId, textPreview }) {
   if (!SCORE_MODES.includes(mode)) return null;
+  const key = cleanName(name);
+  if (isBanned(key)) return null;            // pseudo banni → on n'enregistre rien
   wpm = clampNum(wpm, 0, 400);
   acc = clampNum(acc, 0, 100);
   chars = clampNum(chars, 0, 100000);
   timeMs = clampNum(timeMs, 0, 3600000);
-  if (wpm < 1 || chars < 1) return null; // rien tapé → on n'enregistre pas
+  if (wpm < 1 || chars < 1) return null;     // rien tapé → on n'enregistre pas
+  if (wpm > MAX_HUMAN_WPM) return null;       // vitesse impossible → soupçon de bot, ignoré
   textId = (textId || "").toString().slice(0, 40);
   textPreview = (textPreview || "").toString().slice(0, 80);
 
-  const key = cleanName(name);
   let p = SCORES.players[key];
   if (!p) {
     // garde-fou anti-débordement : si trop de profils, on retire le plus ancien
@@ -258,11 +264,50 @@ function rankOf(name) {
   return { rank: i < 0 ? null : i + 1, total: lb.length };
 }
 
+/* ----- Modération (admin) : bannir, débannir, supprimer un score ----- */
+function isBanned(name) {
+  return Array.isArray(SCORES.banned) && SCORES.banned.includes(cleanName(name));
+}
+// Bannir un pseudo : il ne peut plus enregistrer de score ni jouer en multi, et
+// son profil (scores) est supprimé.
+function banPlayer(name) {
+  const key = cleanName(name);
+  if (!Array.isArray(SCORES.banned)) SCORES.banned = [];
+  if (!SCORES.banned.includes(key)) SCORES.banned.push(key);
+  delete SCORES.players[key];
+  persistScores();
+  return key;
+}
+function unbanPlayer(name) {
+  const key = cleanName(name);
+  if (Array.isArray(SCORES.banned)) SCORES.banned = SCORES.banned.filter((n) => n !== key);
+  persistScores();
+  return key;
+}
+// Supprimer le score d'un joueur (sans le bannir). Renvoie true s'il existait.
+function deletePlayerScores(name) {
+  const key = cleanName(name);
+  const existed = !!SCORES.players[key];
+  delete SCORES.players[key];
+  if (existed) persistScores();
+  return existed;
+}
+// Liste légère des profils (pour le panneau admin « joueurs »).
+function playersAdminList() {
+  return Object.values(SCORES.players)
+    .map((p) => ({ name: p.name, bestWpm: p.bestWpm || 0, count: p.count || 0, lastSeen: p.lastSeen || 0 }))
+    .sort((a, b) => b.bestWpm - a.bestWpm);
+}
+
 // --- Sauvegarde du classement (fichier local) ---
 function loadScoresFile() {
   try {
     const data = JSON.parse(fs.readFileSync(SCORES_FILE, "utf8"));
-    if (data && data.players && typeof data.players === "object") { SCORES.players = data.players; return true; }
+    if (data && data.players && typeof data.players === "object") {
+      SCORES.players = data.players;
+      if (Array.isArray(data.banned)) SCORES.banned = data.banned;
+      return true;
+    }
   } catch { /* pas de fichier → on démarre avec un classement vide */ }
   return false;
 }
@@ -279,7 +324,11 @@ async function loadScoresStore() {
   if (!raw) return false;
   try {
     const data = JSON.parse(raw);
-    if (data && data.players && typeof data.players === "object") { SCORES.players = data.players; return true; }
+    if (data && data.players && typeof data.players === "object") {
+      SCORES.players = data.players;
+      if (Array.isArray(data.banned)) SCORES.banned = data.banned;
+      return true;
+    }
   } catch { /* contenu illisible → on ignore */ }
   return false;
 }
@@ -359,7 +408,19 @@ const server = http.createServer((req, res) => {
       let msg; try { msg = JSON.parse(body); } catch { return sendJson(res, 400, { error: "requête invalide" }); }
       if (msg.password !== ADMIN_PASSWORD) return sendJson(res, 403, { error: "mot de passe incorrect" });
 
-      const listName = msg.list; // "common" | "hard" | "texts"
+      // --- Modération des joueurs / du classement ---
+      if (msg.action === "players") {
+        return sendJson(res, 200, { players: playersAdminList(), banned: SCORES.banned || [] });
+      }
+      if (msg.action === "deleteScore" || msg.action === "ban" || msg.action === "unban") {
+        let message = "";
+        if (msg.action === "deleteScore") message = deletePlayerScores(msg.name) ? "score supprimé ✓" : "aucun score pour ce pseudo";
+        else if (msg.action === "ban") { banPlayer(msg.name); message = "banni ✓ (score supprimé)"; }
+        else { unbanPlayer(msg.name); message = "débanni ✓"; }
+        return sendJson(res, 200, { ok: true, players: playersAdminList(), banned: SCORES.banned || [], message });
+      }
+
+      const listName = msg.list; // "common" | "hard" | "texts" | "code"
       const needsList = msg.action === "add" || msg.action === "remove" || msg.action === "edit";
       if (needsList && !WORDS[listName]) {
         return sendJson(res, 400, { error: "liste inconnue" });
@@ -371,10 +432,10 @@ const server = http.createServer((req, res) => {
         const value = normalizeTypography(msg.value).trim();
         if (!value) {
           message = "rien à ajouter";
-        } else if (listName === "texts") {
-          // un texte = une entrée complète (paragraphe)
-          if (WORDS.texts.includes(value)) message = "ce texte existe déjà";
-          else { WORDS.texts.push(value); changed = true; message = "texte ajouté ✓"; }
+        } else if (listName === "texts" || listName === "code") {
+          // texte / ligne de code = une entrée complète (on ne découpe pas)
+          if (WORDS[listName].includes(value)) message = "cette entrée existe déjà";
+          else { WORDS[listName].push(value); changed = true; message = listName === "code" ? "ligne ajoutée ✓" : "texte ajouté ✓"; }
         } else {
           // mots : on accepte plusieurs mots séparés par des espaces ; anti-doublon
           let added = 0, dup = 0;
@@ -812,6 +873,7 @@ wss.on("connection", (ws) => {
 
     switch (msg.type) {
       case "create": {
+        if (isBanned(msg.name)) { send(ws, { type: "error", message: "Tu as été banni du jeu." }); return; }
         const code = code4();
         const id = ++pid;
         const player = mkPlayer(id, msg.name, ws);
@@ -827,6 +889,7 @@ wss.on("connection", (ws) => {
         break;
       }
       case "join": {
+        if (isBanned(msg.name)) { send(ws, { type: "error", message: "Tu as été banni du jeu." }); return; }
         const r = rooms.get((msg.code || "").toUpperCase());
         if (!r) { send(ws, { type: "error", message: "Salon introuvable." }); return; }
         if (r.state !== "lobby") { send(ws, { type: "error", message: "La partie a déjà commencé." }); return; }
@@ -926,9 +989,10 @@ wss.on("connection", (ws) => {
         p.wpm = msg.wpm || p.wpm;
         p.accuracy = msg.accuracy || 0;
         // a-t-il VRAIMENT tapé le texte ? (sinon : arrivée « poubelle », ne gagne pas)
+        // + vitesse humainement plausible (sinon : soupçon de bot).
         const finishProgress = Math.max(0, Math.min(100, Math.round(msg.progress || 0)));
         p.finishProgress = finishProgress;
-        p.validFinish = (p.accuracy >= MIN_FINISH_ACCURACY) && (finishProgress >= MIN_FINISH_PROGRESS);
+        p.validFinish = (p.accuracy >= MIN_FINISH_ACCURACY) && (finishProgress >= MIN_FINISH_PROGRESS) && (p.wpm <= MAX_HUMAN_WPM);
         p.progress = p.validFinish ? 100 : finishProgress; // barre pleine seulement si arrivée valide
         broadcast(room, { type: "update", players: raceState(room) });
         const all = [...room.players.values()];
