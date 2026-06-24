@@ -60,18 +60,20 @@ function createEngine(typingEl) {
   streamEl.appendChild(canvas);
   const ctx = canvas.getContext("2d");
   let layout = [], cssW = 0, cssH = 0, caretOn = true;
-  let pop = null, popRaf = 0; // petit « saut » de la dernière bonne lettre tapée
-  const POP_MS = 200;
-  // Lance l'animation de saut sur la lettre (i, j) et redessine pendant ~200 ms.
-  function startPop(i, j) {
-    pop = { i, j, start: now() };
-    if (!popRaf) animatePop();
-  }
-  function animatePop() {
-    popRaf = requestAnimationFrame(() => {
-      popRaf = 0;
-      if (pop && now() - pop.start < POP_MS) { draw(); animatePop(); }
-      else { pop = null; draw(); }
+  // Animations de lettre : « saut » quand c'est bon, « tremblement » quand c'est faux.
+  let pop = null, shake = null, animRaf = 0;
+  const POP_MS = 200, SHAKE_MS = 280;
+  function startPop(i, j) { pop = { i, j, start: now() }; ensureAnim(); }
+  function startShake(i, j) { shake = { i, j, start: now() }; ensureAnim(); }
+  function ensureAnim() { if (!animRaf) loopAnim(); }
+  function loopAnim() {
+    animRaf = requestAnimationFrame(() => {
+      animRaf = 0;
+      const t = now();
+      if (pop && t - pop.start >= POP_MS) pop = null;
+      if (shake && t - shake.start >= SHAKE_MS) shake = null;
+      draw();
+      if (pop || shake) loopAnim();
     });
   }
 
@@ -139,11 +141,15 @@ function createEngine(typingEl) {
         else { ch = t[j]; color = cErr; }
         ctx.fillStyle = color;
         const cw = ctx.measureText(ch).width;
-        // petit saut de la lettre qui vient d'être bien tapée
-        let bump = 0;
+        // petit saut quand la lettre est bonne, tremblement quand elle est fausse
+        let bump = 0, dx = 0;
         if (pop && pop.i === i && pop.j === j) {
           const p = (now() - pop.start) / POP_MS;
           if (p < 1) bump = Math.sin(p * Math.PI); // 0 → 1 → 0
+        }
+        if (shake && shake.i === i && shake.j === j) {
+          const p = (now() - shake.start) / SHAKE_MS;
+          if (p < 1) dx = Math.sin(p * Math.PI * 6) * f.size * 0.16 * (1 - p); // va-et-vient qui s'atténue
         }
         if (bump > 0) {
           const sc = 1 + bump * 0.28, dy = -bump * f.size * 0.2;
@@ -153,7 +159,7 @@ function createEngine(typingEl) {
           ctx.fillText(ch, -cw / 2, -f.size / 2);
           ctx.restore();
         } else {
-          ctx.fillText(ch, cx, y);
+          ctx.fillText(ch, cx + dx, y);
         }
         cx += cw;
       }
@@ -203,7 +209,8 @@ function createEngine(typingEl) {
     if ((input[cur] || "").length < words[cur].length + 8) {
       input[cur] = (input[cur] || "") + k;
       caretOn = true;
-      if (k === expected) startPop(cur, input[cur].length - 1); // bonne lettre → petit saut
+      if (k === expected) startPop(cur, input[cur].length - 1);   // bonne lettre → petit saut
+      else startShake(cur, input[cur].length - 1);                // mauvaise lettre → tremblement
       draw();
     }
     checkFinish();
